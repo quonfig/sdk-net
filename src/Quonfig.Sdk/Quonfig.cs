@@ -54,9 +54,14 @@ public sealed class Quonfig : IQuonfig
 
     private readonly QuonfigOptions _opts;
     private readonly ILogger _logger;
-    private readonly string? _effectiveEnvironment;
+    private string? _effectiveEnvironment;
     private readonly TaskCompletionSource<bool> _initTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _stateLock = new();
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Reliability", "CA2213:Disposable fields should be disposed",
+        Justification = "DatadirWatcher is disposed via CloseAsync.")]
+    private volatile DatadirWatcher? _datadirWatcher;
 
     private volatile ConfigStore? _store;
     private volatile Evaluator? _evaluator;
@@ -96,6 +101,10 @@ public sealed class Quonfig : IQuonfig
         else if (!string.IsNullOrEmpty(options.Datafile))
         {
             InitDatafile(options.Datafile!);
+        }
+        else if (options.DatafileEnvelope is not null)
+        {
+            InitDatafileEnvelope(options.DatafileEnvelope);
         }
         else
         {
@@ -145,6 +154,12 @@ public sealed class Quonfig : IQuonfig
     public async Task CloseAsync()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        var watcher = _datadirWatcher;
+        if (watcher is not null)
+        {
+            await watcher.DisposeAsync().ConfigureAwait(false);
+            _datadirWatcher = null;
+        }
         // Stop SSE first; the run task respects the CTS and unwinds.
         try { _sseCts?.Cancel(); } catch (ObjectDisposedException) { }
         var sseTask = _sseRunTask;
@@ -327,10 +342,11 @@ public sealed class Quonfig : IQuonfig
         int modes = 0;
         if (!string.IsNullOrEmpty(opts.Datadir)) modes++;
         if (!string.IsNullOrEmpty(opts.Datafile)) modes++;
+        if (opts.DatafileEnvelope is not null) modes++;
         if (modes > 1)
         {
             throw new ArgumentException(
-                "QuonfigOptions: set at most one of Datadir or Datafile",
+                "QuonfigOptions: set at most one of Datadir, Datafile, or DatafileEnvelope",
                 nameof(opts));
         }
     }
@@ -360,6 +376,11 @@ public sealed class Quonfig : IQuonfig
         var envelope = DatadirLoader.Load(datadir, _opts.Environment!, _logger);
         InstallEnvelope(envelope);
         _initTcs.TrySetResult(true);
+
+        if (_opts.DatadirAutoReload)
+        {
+            StartDatadirWatcher(datadir);
+        }
     }
 
     private void InitDatafile(string datafilePath)
@@ -375,8 +396,74 @@ public sealed class Quonfig : IQuonfig
         {
             throw new QuonfigException($"failed to read datafile {datafilePath}: {ex.Message}", ex);
         }
+        InstallDatafileEnvelope(envelope);
+    }
+
+    private void InitDatafileEnvelope(ConfigEnvelope envelope) => InstallDatafileEnvelope(envelope);
+
+    private void InstallDatafileEnvelope(ConfigEnvelope envelope)
+    {
+        // If the caller did not pin Environment, fall back to envelope.meta.environment so the
+        // evaluator and metadata both surface the same value. Matches sdk-java parity (qfg-9hre).
+        if (string.IsNullOrEmpty(_effectiveEnvironment) && !string.IsNullOrEmpty(envelope.Meta?.Environment))
+        {
+            _effectiveEnvironment = envelope.Meta!.Environment;
+        }
         InstallEnvelope(envelope);
         _initTcs.TrySetResult(true);
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Auto-reload start failure must degrade gracefully — log and continue serving the initial envelope.")]
+    private void StartDatadirWatcher(string datadir)
+    {
+        DatadirWatcher? watcher = null;
+        try
+        {
+            watcher = new DatadirWatcher(
+                datadir,
+                _opts.DatadirAutoReloadDebounce,
+                onChange: () => ReloadDatadir(datadir),
+                onError: ex => _logger.LogWarning(ex, "quonfig: datadir watcher error: {Message}", ex.Message),
+                logger: _logger);
+
+            if (watcher.Start())
+            {
+                _datadirWatcher = watcher;
+                watcher = null; // ownership transferred to the field; CloseAsync will dispose
+            }
+            else
+            {
+                _logger.LogWarning("quonfig: datadir auto-reload watcher failed to start; continuing without watching");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "quonfig: datadir auto-reload setup threw: {Message}", ex.Message);
+        }
+        finally
+        {
+            watcher?.Dispose();
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "A bad reload must not tear down the client — keep the previous store, log, continue.")]
+    private void ReloadDatadir(string datadir)
+    {
+        if (Volatile.Read(ref _closed) != 0) return;
+        try
+        {
+            var envelope = DatadirLoader.Load(datadir, _effectiveEnvironment!, _logger);
+            InstallEnvelope(envelope);
+        }
+        catch (Exception ex)
+        {
+            // Parse-then-swap: keep serving the previous envelope, do NOT fire OnConfigChange.
+            _logger.LogWarning(ex, "quonfig: datadir reload failed; keeping previous envelope: {Message}", ex.Message);
+        }
     }
 
     private async Task RunHttpInitAsync()

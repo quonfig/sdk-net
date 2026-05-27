@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using Microsoft.Extensions.Logging;
+using Quonfig.Sdk.Wire;
 
 namespace Quonfig.Sdk;
 
@@ -59,6 +60,13 @@ public sealed class QuonfigOptions
     /// synchronously and no network calls are made.
     /// </summary>
     public string? Datafile { get; set; }
+
+    /// <summary>
+    /// Pre-parsed datafile envelope for datafile mode. Mutually exclusive with <see cref="Datafile"/>.
+    /// When set, the envelope is installed at construction with no I/O. If <see cref="Environment"/>
+    /// is not set, <c>envelope.meta.environment</c> is used as the evaluation environment.
+    /// </summary>
+    public ConfigEnvelope? DatafileEnvelope { get; set; }
 
     /// <summary>Opt-in: watch <see cref="Datadir"/> for file changes and reload atomically.</summary>
     public bool DatadirAutoReload { get; set; }
