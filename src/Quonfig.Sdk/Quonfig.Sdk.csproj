@@ -10,6 +10,15 @@
     <PackageTags>quonfig;feature-flags;configuration;feature-management</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <IsPackable>true</IsPackable>
+    <!--
+      CA1710  — cross-SDK type names (ContextSet, ContextProperties) are fixed by the wire spec,
+                we cannot rename to *Dictionary / *Collection.
+      CA2225  — implicit operators on ContextValue are by design; the plan calls them out as the
+                primary ergonomic. No "FromXxx" sugar is wanted at the call site.
+      CA1032  — exception subclasses intentionally take only (message) / (message, inner) to match
+                the cross-SDK convention; (SerializationInfo) ctor isn't needed in modern .NET.
+    -->
+    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
