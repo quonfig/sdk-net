@@ -12,6 +12,17 @@
     <!-- ImmutableDictionary backs ConfigStore. In-box on net8.0; PackageReference brings it to NS2.0. -->
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <!-- Microsoft.Extensions.Logging brings ILoggingBuilder + the default ILoggerFactory
+         impl. Required by Quonfig.Sdk.Extensions.Logging for the builder-extension surface. -->
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+    <!-- Microsoft.Extensions.Hosting.Abstractions brings IHostedService for the AspNetCore
+         companion's init-on-start / close-on-stop hook. -->
+    <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
+    <!-- Serilog companion: minimum-supported Serilog floor. -->
+    <PackageVersion Include="Serilog" Version="4.1.0" />
+    <PackageVersion Include="Serilog.Sinks.TestCorrelator" Version="4.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.10" />
     <!--
       BouncyCastle.Cryptography — netstandard2.0 polyfill for AES-GCM (System.Security.Cryptography.AesGcm
       only exists on net8.0+). Plan project/plans/sdk-net.md ("Dependencies") pre-approves BouncyCastle as

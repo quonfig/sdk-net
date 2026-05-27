@@ -210,6 +210,9 @@ public sealed class Quonfig : IQuonfig
     /// <inheritdoc/>
     public event Action<ConnectionState>? OnConnectionStateChange;
 
+    /// <inheritdoc/>
+    public event Action? OnConfigChange;
+
     // ---------------- Typed getters ----------------
 
     /// <inheritdoc/>
@@ -540,6 +543,24 @@ public sealed class Quonfig : IQuonfig
         lock (_stateLock)
         {
             _localLastRefresh = DateTimeOffset.UtcNow;
+        }
+        FireConfigChange();
+    }
+
+    private void FireConfigChange()
+    {
+        var handler = OnConfigChange;
+        if (handler is null) return;
+        foreach (var del in handler.GetInvocationList())
+        {
+            try
+            {
+                ((Action)del)();
+            }
+            catch (Exception ex) when (!(ex is OperationCanceledException))
+            {
+                _logger.LogWarning(ex, "quonfig: OnConfigChange handler threw: {Message}", ex.Message);
+            }
         }
     }
 

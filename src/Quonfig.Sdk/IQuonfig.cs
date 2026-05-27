@@ -41,6 +41,14 @@ public interface IQuonfig : IAsyncDisposable
     /// <summary>Fires when <see cref="ConnectionState"/> transitions. Subscribers must not throw.</summary>
     event Action<ConnectionState>? OnConnectionStateChange;
 
+    /// <summary>
+    /// Fires after a new envelope has been installed (initial load and every subsequent SSE /
+    /// fallback / datadir-watcher refresh). Subscribers must not throw. Used by the
+    /// <c>Quonfig.Sdk.Serilog</c> companion package to re-evaluate <c>LoggingLevelSwitch</c>
+    /// values reactively on config changes.
+    /// </summary>
+    event Action? OnConfigChange;
+
     // ---- typed getters ----
 
     /// <summary>Returns the resolved string value of <paramref name="key"/>, or <paramref name="defaultValue"/> when missing.</summary>

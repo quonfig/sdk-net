@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 only — AspNetCore companion is net8.0-only, so the test project follows. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Mirror the main test project's relaxations. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861;CA1812;CA1031;CA1848;CA2000;CA1849</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="Serilog" />
+    <PackageReference Include="Serilog.Sinks.TestCorrelator" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quonfig.Sdk\Quonfig.Sdk.csproj" />
+    <ProjectReference Include="..\..\src\Quonfig.Sdk.Extensions.Logging\Quonfig.Sdk.Extensions.Logging.csproj" />
+    <ProjectReference Include="..\..\src\Quonfig.Sdk.Serilog\Quonfig.Sdk.Serilog.csproj" />
+    <ProjectReference Include="..\..\src\Quonfig.Sdk.AspNetCore\Quonfig.Sdk.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>

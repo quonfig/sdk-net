@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;netstandard2.0</TargetFrameworks>
+    <RootNamespace>Quonfig.Sdk.Serilog</RootNamespace>
+    <AssemblyName>Quonfig.Sdk.Serilog</AssemblyName>
+    <PackageId>Quonfig.Sdk.Serilog</PackageId>
+    <Title>Quonfig .NET SDK — Serilog level switch provider</Title>
+    <Description>Per-category Serilog LoggingLevelSwitch provider that subscribes to Quonfig config updates and adjusts levels reactively. Companion package to Quonfig.Sdk.</Description>
+    <PackageTags>quonfig;feature-flags;configuration;logging;Serilog</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Quonfig.Sdk\Quonfig.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>
