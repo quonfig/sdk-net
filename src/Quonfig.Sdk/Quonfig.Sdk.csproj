@@ -25,8 +25,13 @@
       CA1859  — Resolver's coercion helpers return IReadOnlyList<string> so callers can program
                 against the type advertised in ValueType.StringList's docs (immutable view), not
                 the underlying string[].
+      CA1848  — log-call sites are warning-tier on rare transport events (SSE stall, malformed
+                envelope, handler exception); LoggerMessage source-generators would add ceremony
+                without measurable benefit on a ~once-per-reconnect log path.
+      CA5394  — Random is used for SSE reconnect-backoff jitter only, not for any security
+                decision; a CSPRNG would be overkill.
     -->
-    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032;CA1720;CA1859</NoWarn>
+    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032;CA1720;CA1859;CA1848;CA5394</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
