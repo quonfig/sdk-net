@@ -30,7 +30,7 @@ public sealed class SupervisorTests
         int calls = 0;
         var restarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx =>
             {
@@ -43,7 +43,7 @@ public sealed class SupervisorTests
                 await ctx.AwaitStopAsync().ConfigureAwait(false);
             });
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });
@@ -65,7 +65,7 @@ public sealed class SupervisorTests
     [Fact]
     public async Task ExponentialBackoffFormula()
     {
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(500),
             maxDelay: TimeSpan.FromSeconds(30));
         var want = new[]
@@ -91,7 +91,7 @@ public sealed class SupervisorTests
     public async Task StopJoinsWithinDeadline()
     {
         var running = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx =>
             {
@@ -99,7 +99,7 @@ public sealed class SupervisorTests
                 await ctx.AwaitStopAsync().ConfigureAwait(false);
             });
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });
@@ -129,7 +129,7 @@ public sealed class SupervisorTests
         const int wantRestarts = 3;
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx =>
             {
@@ -142,7 +142,7 @@ public sealed class SupervisorTests
                 await ctx.AwaitStopAsync().ConfigureAwait(false);
             });
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });
@@ -169,7 +169,7 @@ public sealed class SupervisorTests
         int phase = 0;
         var resumed = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx =>
             {
@@ -181,7 +181,7 @@ public sealed class SupervisorTests
                 await ctx.AwaitStopAsync().ConfigureAwait(false);
             });
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });
@@ -206,7 +206,7 @@ public sealed class SupervisorTests
     public async Task ConnectionStateAndLastRefresh()
     {
         var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx =>
             {
@@ -214,7 +214,7 @@ public sealed class SupervisorTests
                 await ctx.AwaitStopAsync().ConfigureAwait(false);
             });
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });
@@ -253,11 +253,11 @@ public sealed class SupervisorTests
     [Fact]
     public async Task CleanShutdownDoesNotCountAsRestart()
     {
-        var spec = new Quonfig.Sdk.Supervisor.WorkerSpec(
+        var spec = new global::Quonfig.Sdk.Supervisor.WorkerSpec(
             "1",
             async ctx => await ctx.AwaitStopAsync().ConfigureAwait(false));
 
-        await using var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        await using var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
             workers: new[] { spec });

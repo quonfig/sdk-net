@@ -118,208 +118,208 @@ public static class Operators
 
             case PROP_IS_ONE_OF:
             case PROP_IS_NOT_ONE_OF:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var matchStrings = StringListOf(matchValue);
-                    if (matchStrings is not null)
+                    if (contextExists && matchValue is not null)
                     {
-                        var contextStrings = ToStringList(contextValue);
-                        bool matchFound = false;
-                        foreach (var cv in contextStrings)
+                        var matchStrings = StringListOf(matchValue);
+                        if (matchStrings is not null)
                         {
-                            if (matchStrings.Contains(cv))
+                            var contextStrings = ToStringList(contextValue);
+                            bool matchFound = false;
+                            foreach (var cv in contextStrings)
                             {
-                                matchFound = true;
-                                break;
+                                if (matchStrings.Contains(cv))
+                                {
+                                    matchFound = true;
+                                    break;
+                                }
                             }
+                            return matchFound == (op == PROP_IS_ONE_OF);
                         }
-                        return matchFound == (op == PROP_IS_ONE_OF);
                     }
+                    return op == PROP_IS_NOT_ONE_OF;
                 }
-                return op == PROP_IS_NOT_ONE_OF;
-            }
 
             case PROP_STARTS_WITH_ONE_OF:
             case PROP_DOES_NOT_START_WITH_ONE_OF:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var matchStrings = StringListOf(matchValue);
-                    if (matchStrings is not null)
+                    if (contextExists && matchValue is not null)
                     {
-                        var cv = ToStringOrEmpty(contextValue);
-                        bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Starts);
-                        return matchFound == (op == PROP_STARTS_WITH_ONE_OF);
+                        var matchStrings = StringListOf(matchValue);
+                        if (matchStrings is not null)
+                        {
+                            var cv = ToStringOrEmpty(contextValue);
+                            bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Starts);
+                            return matchFound == (op == PROP_STARTS_WITH_ONE_OF);
+                        }
                     }
+                    return op == PROP_DOES_NOT_START_WITH_ONE_OF;
                 }
-                return op == PROP_DOES_NOT_START_WITH_ONE_OF;
-            }
 
             case PROP_ENDS_WITH_ONE_OF:
             case PROP_DOES_NOT_END_WITH_ONE_OF:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var matchStrings = StringListOf(matchValue);
-                    if (matchStrings is not null)
+                    if (contextExists && matchValue is not null)
                     {
-                        var cv = ToStringOrEmpty(contextValue);
-                        bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Ends);
-                        return matchFound == (op == PROP_ENDS_WITH_ONE_OF);
+                        var matchStrings = StringListOf(matchValue);
+                        if (matchStrings is not null)
+                        {
+                            var cv = ToStringOrEmpty(contextValue);
+                            bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Ends);
+                            return matchFound == (op == PROP_ENDS_WITH_ONE_OF);
+                        }
                     }
+                    return op == PROP_DOES_NOT_END_WITH_ONE_OF;
                 }
-                return op == PROP_DOES_NOT_END_WITH_ONE_OF;
-            }
 
             case PROP_CONTAINS_ONE_OF:
             case PROP_DOES_NOT_CONTAIN_ONE_OF:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var matchStrings = StringListOf(matchValue);
-                    if (matchStrings is not null)
+                    if (contextExists && matchValue is not null)
                     {
-                        var cv = ToStringOrEmpty(contextValue);
-                        bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Contains);
-                        return matchFound == (op == PROP_CONTAINS_ONE_OF);
+                        var matchStrings = StringListOf(matchValue);
+                        if (matchStrings is not null)
+                        {
+                            var cv = ToStringOrEmpty(contextValue);
+                            bool matchFound = AnyMatch(matchStrings, cv, MatchKind.Contains);
+                            return matchFound == (op == PROP_CONTAINS_ONE_OF);
+                        }
                     }
+                    return op == PROP_DOES_NOT_CONTAIN_ONE_OF;
                 }
-                return op == PROP_DOES_NOT_CONTAIN_ONE_OF;
-            }
 
             case PROP_MATCHES:
             case PROP_DOES_NOT_MATCH:
-            {
-                if (contextExists
-                    && matchValue is not null
-                    && contextValue is string cv
-                    && matchValue.Payload is string pattern)
                 {
-                    try
+                    if (contextExists
+                        && matchValue is not null
+                        && contextValue is string cv
+                        && matchValue.Payload is string pattern)
                     {
-                        var matched = Regex.IsMatch(cv, pattern);
-                        return matched == (op == PROP_MATCHES);
+                        try
+                        {
+                            var matched = Regex.IsMatch(cv, pattern);
+                            return matched == (op == PROP_MATCHES);
+                        }
+                        catch (ArgumentException)
+                        {
+                            // Invalid regex pattern — fail closed (matches sdk-java/sdk-go).
+                            return false;
+                        }
                     }
-                    catch (ArgumentException)
-                    {
-                        // Invalid regex pattern — fail closed (matches sdk-java/sdk-go).
-                        return false;
-                    }
+                    return false;
                 }
-                return false;
-            }
 
             case HIERARCHICAL_MATCH:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var cv = ToStringOrEmpty(contextValue);
-                    var mv = ToStringOrEmpty(matchValue.Payload);
-                    return cv.StartsWith(mv, StringComparison.Ordinal);
+                    if (contextExists && matchValue is not null)
+                    {
+                        var cv = ToStringOrEmpty(contextValue);
+                        var mv = ToStringOrEmpty(matchValue.Payload);
+                        return cv.StartsWith(mv, StringComparison.Ordinal);
+                    }
+                    return false;
                 }
-                return false;
-            }
 
             case IN_INT_RANGE:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    var (start, end) = ExtractIntRange(matchValue);
-                    if (TryToDouble(contextValue, out double n))
+                    if (contextExists && matchValue is not null)
                     {
-                        return n >= start && n < end;
+                        var (start, end) = ExtractIntRange(matchValue);
+                        if (TryToDouble(contextValue, out double n))
+                        {
+                            return n >= start && n < end;
+                        }
                     }
+                    return false;
                 }
-                return false;
-            }
 
             case PROP_GREATER_THAN:
             case PROP_GREATER_THAN_OR_EQUAL:
             case PROP_LESS_THAN:
             case PROP_LESS_THAN_OR_EQUAL:
-            {
-                if (contextExists
-                    && matchValue is not null
-                    && IsNumber(contextValue)
-                    && IsNumber(matchValue.Payload)
-                    && TryToDouble(contextValue, out double a)
-                    && TryToDouble(matchValue.Payload, out double b))
                 {
-                    int cmp = a.CompareTo(b);
-                    return op switch
+                    if (contextExists
+                        && matchValue is not null
+                        && IsNumber(contextValue)
+                        && IsNumber(matchValue.Payload)
+                        && TryToDouble(contextValue, out double a)
+                        && TryToDouble(matchValue.Payload, out double b))
                     {
-                        PROP_GREATER_THAN => cmp > 0,
-                        PROP_GREATER_THAN_OR_EQUAL => cmp >= 0,
-                        PROP_LESS_THAN => cmp < 0,
-                        PROP_LESS_THAN_OR_EQUAL => cmp <= 0,
-                        _ => false,
-                    };
+                        int cmp = a.CompareTo(b);
+                        return op switch
+                        {
+                            PROP_GREATER_THAN => cmp > 0,
+                            PROP_GREATER_THAN_OR_EQUAL => cmp >= 0,
+                            PROP_LESS_THAN => cmp < 0,
+                            PROP_LESS_THAN_OR_EQUAL => cmp <= 0,
+                            _ => false,
+                        };
+                    }
+                    return false;
                 }
-                return false;
-            }
 
             case PROP_BEFORE:
             case PROP_AFTER:
-            {
-                if (contextExists && matchValue is not null)
                 {
-                    if (TryDateToMillis(contextValue, out long ctxMillis)
-                        && TryDateToMillis(matchValue.Payload, out long matchMillis))
+                    if (contextExists && matchValue is not null)
                     {
-                        return op == PROP_BEFORE ? ctxMillis < matchMillis : ctxMillis > matchMillis;
+                        if (TryDateToMillis(contextValue, out long ctxMillis)
+                            && TryDateToMillis(matchValue.Payload, out long matchMillis))
+                        {
+                            return op == PROP_BEFORE ? ctxMillis < matchMillis : ctxMillis > matchMillis;
+                        }
                     }
+                    return false;
                 }
-                return false;
-            }
 
             case PROP_SEMVER_LESS_THAN:
             case PROP_SEMVER_EQUAL:
             case PROP_SEMVER_GREATER_THAN:
-            {
-                if (contextExists
-                    && matchValue is not null
-                    && contextValue is string ctxStr
-                    && matchValue.Payload is string matchStr
-                    && SemanticVersion.TryParse(ctxStr, out var ctxSv)
-                    && SemanticVersion.TryParse(matchStr, out var matchSv))
                 {
-                    int cmp = ctxSv!.CompareTo(matchSv);
-                    return op switch
+                    if (contextExists
+                        && matchValue is not null
+                        && contextValue is string ctxStr
+                        && matchValue.Payload is string matchStr
+                        && SemanticVersion.TryParse(ctxStr, out var ctxSv)
+                        && SemanticVersion.TryParse(matchStr, out var matchSv))
                     {
-                        PROP_SEMVER_LESS_THAN => cmp < 0,
-                        PROP_SEMVER_EQUAL => cmp == 0,
-                        PROP_SEMVER_GREATER_THAN => cmp > 0,
-                        _ => false,
-                    };
+                        int cmp = ctxSv!.CompareTo(matchSv);
+                        return op switch
+                        {
+                            PROP_SEMVER_LESS_THAN => cmp < 0,
+                            PROP_SEMVER_EQUAL => cmp == 0,
+                            PROP_SEMVER_GREATER_THAN => cmp > 0,
+                            _ => false,
+                        };
+                    }
+                    return false;
                 }
-                return false;
-            }
 
             case IS_PRESENT:
             case IS_NOT_PRESENT:
-            {
-                // A property is "present" iff the dotted path resolved AND the value is non-null.
-                // Empty string, 0, and false are intentionally treated as present (matches sdk-java/sdk-go).
-                bool present = contextExists && contextValue is not null;
-                return present == (op == IS_PRESENT);
-            }
+                {
+                    // A property is "present" iff the dotted path resolved AND the value is non-null.
+                    // Empty string, 0, and false are intentionally treated as present (matches sdk-java/sdk-go).
+                    bool present = contextExists && contextValue is not null;
+                    return present == (op == IS_PRESENT);
+                }
 
             case IN_SEG:
             case NOT_IN_SEG:
-            {
-                if (matchValue is not null && segmentResolver is not null)
                 {
-                    var segKey = ToStringOrEmpty(matchValue.Payload);
-                    var r = segmentResolver(segKey);
-                    if (!r.Found)
+                    if (matchValue is not null && segmentResolver is not null)
                     {
-                        return op == NOT_IN_SEG;
+                        var segKey = ToStringOrEmpty(matchValue.Payload);
+                        var r = segmentResolver(segKey);
+                        if (!r.Found)
+                        {
+                            return op == NOT_IN_SEG;
+                        }
+                        return r.Value == (op == IN_SEG);
                     }
-                    return r.Value == (op == IN_SEG);
+                    return op == NOT_IN_SEG;
                 }
-                return op == NOT_IN_SEG;
-            }
 
             default:
                 return false;

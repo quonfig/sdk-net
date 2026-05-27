@@ -9,7 +9,9 @@
     <TargetFrameworks>net8.0;net48</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
-    <NoWarn>$(NoWarn);CA1707</NoWarn>
+    <!-- CA1707: snake_case test method names. CA2007: ConfigureAwait noise in tests.
+         CA1861: constant array args are clearer than static-readonly fields in assertions. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

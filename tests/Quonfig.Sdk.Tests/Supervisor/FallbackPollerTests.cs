@@ -36,12 +36,12 @@ public sealed class FallbackPollerTests
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Reliability", "CA2000",
         Justification = "Caller assumes ownership; tests await s.StopAsync() before exiting.")]
-    private static Quonfig.Sdk.Supervisor.Supervisor Supervise(FallbackPoller p)
+    private static global::Quonfig.Sdk.Supervisor.Supervisor Supervise(FallbackPoller p)
     {
-        var s = new Quonfig.Sdk.Supervisor.Supervisor(
+        var s = new global::Quonfig.Sdk.Supervisor.Supervisor(
             initialDelay: TimeSpan.FromMilliseconds(1),
             maxDelay: TimeSpan.FromMilliseconds(5),
-            workers: new[] { new Quonfig.Sdk.Supervisor.WorkerSpec("2", p.Worker) });
+            workers: new[] { new WorkerSpec("2", p.Worker) });
         s.Start();
         return s;
     }

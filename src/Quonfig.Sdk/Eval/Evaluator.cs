@@ -36,6 +36,18 @@ public sealed class Evaluator
     }
 
     /// <summary>
+    /// Convenience overload: builds a default <see cref="Resolver"/> with the supplied
+    /// <paramref name="envLookup"/> while keeping the recursive decrypt-key resolution that the
+    /// parameterless constructor wires up. Used by <see cref="Quonfig"/> when a caller overrides
+    /// the env-var lookup (testability) without losing decryption support.
+    /// </summary>
+    public Evaluator(ConfigStore? store, Resolver.EnvLookup envLookup)
+    {
+        _store = store;
+        _resolver = new Resolver(envLookup: envLookup, keyResolver: ResolveKey);
+    }
+
+    /// <summary>
     /// Evaluates <paramref name="config"/> against <paramref name="contexts"/> in the given
     /// <paramref name="environmentId"/>. Returns the resolved match — or a "no match" outcome
     /// if no rule (env-specific or default) matched.

@@ -31,7 +31,19 @@
       CA5394  — Random is used for SSE reconnect-backoff jitter only, not for any security
                 decision; a CSPRNG would be overkill.
     -->
-    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032;CA1720;CA1859;CA1848;CA5394</NoWarn>
+    <!--
+      CA1003  — OnConnectionStateChange is intentionally `event Action<ConnectionState>` per the
+                plan; EventArgs ceremony adds nothing for a single-value notification and the
+                cross-SDK shape is a plain callback.
+      CA1056  — TelemetryUrl is a configuration string (round-tripped from env/JSON); forcing
+                Uri at the public surface adds friction without value.
+      CA2227  — QuonfigOptions follows the .NET options pattern; setters on collection-typed
+                properties (ApiUrls, StreamUrls, GlobalContext) are required so callers can
+                assign via object-initializer syntax.
+      CA1849  — CancellationTokenSource.Cancel() in shutdown paths is intentional; CancelAsync()
+                exists only on net8+ and the synchronous form is fine here.
+    -->
+    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032;CA1720;CA1859;CA1848;CA5394;CA1003;CA1056;CA2227;CA1849</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
