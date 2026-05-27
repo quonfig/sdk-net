@@ -47,19 +47,17 @@ public static class DatadirLoader
     {
         if (string.IsNullOrEmpty(environment))
         {
-            throw new ArgumentException(
-                "environment required for datadir mode; pass environment or set QUONFIG_ENVIRONMENT",
-                nameof(environment));
+            throw new InvalidOperationException(
+                "environment required for datadir mode; pass environment or set QUONFIG_ENVIRONMENT");
         }
 
         var manifest = Path.Combine(datadir, "quonfig.json");
         var available = ReadEnvironmentNames(manifest);
         if (available.Count > 0 && !available.Contains(environment))
         {
-            throw new ArgumentException(
+            throw new InvalidOperationException(
                 $"environment \"{environment}\" not found in workspace; available environments: " +
-                    string.Join(", ", available),
-                nameof(environment));
+                    string.Join(", ", available));
         }
 
         var configs = new List<JsonElement>();

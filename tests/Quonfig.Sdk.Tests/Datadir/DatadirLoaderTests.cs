@@ -90,7 +90,7 @@ public sealed class DatadirLoaderTests : IDisposable
         WriteFile("configs", "a.config.json", Config("a"));
 
         Action act = () => DatadirLoader.Load(_root, "");
-        act.Should().Throw<ArgumentException>().WithMessage("*environment*");
+        act.Should().Throw<InvalidOperationException>().WithMessage("*environment*");
     }
 
     [Fact]
@@ -100,7 +100,7 @@ public sealed class DatadirLoaderTests : IDisposable
         WriteFile("configs", "a.config.json", Config("a"));
 
         Action act = () => DatadirLoader.Load(_root, "development");
-        act.Should().Throw<ArgumentException>()
+        act.Should().Throw<InvalidOperationException>()
             .WithMessage("*development*")
             .Which.Message.Should().Contain("production");
     }

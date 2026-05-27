@@ -100,6 +100,12 @@ public sealed class Quonfig : IQuonfig
         else
         {
             ValidateHttpMode(options);
+            // Install an empty store immediately so getters called before init finishes (or
+            // after init fails under OnInitFailure.ReturnDefaults) surface FlagNotFound for any
+            // key — letting the OnNoDefault policy fire — instead of a "not yet initialized"
+            // general error. Cross-SDK contract: pre-init getters return the supplied default
+            // or throw via OnNoDefault, never silently swallow the request.
+            InstallEmptyStoreIfNeeded();
             // Kick off background HTTP init. The constructor returns immediately; callers
             // await InitAsync() to know when it finished (or when the OnInitFailure policy
             // applied to a timeout).
@@ -410,11 +416,25 @@ public sealed class Quonfig : IQuonfig
             return;
         }
         // ReturnDefaults: complete init successfully; SSE supervisor will keep trying.
+        // Install an empty store so subsequent getters return FlagNotFound (and surface the
+        // OnNoDefault policy) rather than "client not yet initialized" — matches sdk-java's
+        // behavior under ReturnDefaults + OnNoDefault.Throw.
+        InstallEmptyStoreIfNeeded();
         _logger.LogWarning(
             error,
             "quonfig: initial config fetch failed under OnInitFailure.ReturnDefaults; serving defaults until SSE delivers an envelope");
         _initTcs.TrySetResult(true);
         StartSse();
+    }
+
+    private void InstallEmptyStoreIfNeeded()
+    {
+        if (_store is not null) return;
+        var store = new ConfigStore();
+        _store = store;
+        _evaluator = _opts.EnvLookup is null
+            ? new Evaluator(store)
+            : new Evaluator(store, new Resolver.EnvLookup(_opts.EnvLookup));
     }
 
     private void StartSse()
