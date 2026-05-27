@@ -18,7 +18,15 @@
       CA1032  — exception subclasses intentionally take only (message) / (message, inner) to match
                 the cross-SDK convention; (SerializationInfo) ctor isn't needed in modern .NET.
     -->
-    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032</NoWarn>
+    <!--
+      CA1720  — ValueType enum members (Int, Double, String) intentionally mirror the wire-format
+                discriminator strings used by every other Quonfig SDK; renaming would break the
+                cross-SDK naming contract.
+      CA1859  — Resolver's coercion helpers return IReadOnlyList<string> so callers can program
+                against the type advertised in ValueType.StringList's docs (immutable view), not
+                the underlying string[].
+    -->
+    <NoWarn>$(NoWarn);CA1710;CA2225;CA1032;CA1720;CA1859</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +34,14 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="System.Threading.Channels" />
     <PackageReference Include="System.Collections.Immutable" />
+  </ItemGroup>
+
+  <!--
+    netstandard2.0 only: BouncyCastle provides the AES-GCM polyfill (System.Security.Cryptography.AesGcm
+    is net8.0+). Conditional so net8.0 consumers don't pick it up transitively — they get the BCL path.
+  -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="BouncyCastle.Cryptography" />
   </ItemGroup>
 
 </Project>

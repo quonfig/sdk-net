@@ -12,6 +12,13 @@
     <!-- ImmutableDictionary backs ConfigStore. In-box on net8.0; PackageReference brings it to NS2.0. -->
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <!--
+      BouncyCastle.Cryptography — netstandard2.0 polyfill for AES-GCM (System.Security.Cryptography.AesGcm
+      only exists on net8.0+). Plan project/plans/sdk-net.md ("Dependencies") pre-approves BouncyCastle as
+      the cross-platform option vs Cng (Windows-only). Referenced only from the netstandard2.0 build via
+      conditional ItemGroup in Quonfig.Sdk.csproj; net8.0 consumers don't transitively pick it up.
+    -->
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.4.0" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
