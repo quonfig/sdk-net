@@ -1,0 +1,42 @@
+## .NET build output
+bin/
+obj/
+out/
+[Dd]ebug/
+[Rr]elease/
+[Bb]uild/
+[Bb]uildLog.*
+
+## Restore output
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## NuGet local cache
+.nuget/
+*.nupkg
+*.snupkg
+
+## IDEs
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Local env
+.env
+
+## Test results
+TestResults/
+*.trx
+*.coverage
+coverage*.json
+coverage*.xml
+
+## Chaos harness — locally-built api-delivery binary (per sdk-java convention)
+.chaos-api-delivery

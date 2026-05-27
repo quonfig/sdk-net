@@ -1,0 +1,90 @@
+name: Test
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }} / ${{ matrix.tfm }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        tfm: [net8.0, netstandard2.0]
+    steps:
+      - name: Checkout sdk-net
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          path: sdk-net
+
+      - name: Checkout integration-test-data
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          repository: quonfig/integration-test-data
+          path: integration-test-data
+          # Pinned to a tag (not main) so a typo in shared YAML can't
+          # break every SDK's CI at once. Bump to a newer tag when
+          # adopting new test cases. See integration-test-data/RELEASING.md.
+          ref: v2026.05.20
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        working-directory: sdk-net
+        run: dotnet restore
+
+      - name: Build (${{ matrix.tfm }})
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          # The library targets net8.0;netstandard2.0; the test project targets net8.0;net48.
+          # Build the library at the matrix TFM, and build the test project at the matching
+          # runtime host (net8.0 -> net8.0; netstandard2.0 -> net48 on Windows, net8.0 on Linux,
+          # since NS2.0 is a contract not a runtime).
+          dotnet build src/Quonfig.Sdk/Quonfig.Sdk.csproj \
+            --configuration Release \
+            --framework "${{ matrix.tfm }}" \
+            --no-restore
+
+          if [[ "${{ matrix.tfm }}" == "netstandard2.0" && "${{ runner.os }}" == "Windows" ]]; then
+            TEST_HOST_TFM=net48
+          else
+            TEST_HOST_TFM=net8.0
+          fi
+          echo "TEST_HOST_TFM=$TEST_HOST_TFM" >> "$GITHUB_ENV"
+
+          dotnet build tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
+            --configuration Release \
+            --framework "$TEST_HOST_TFM" \
+            --no-restore
+
+      - name: Test (-f ${{ matrix.tfm }})
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          # See the build step for the runtime-host mapping. NS2.0 is verified by loading the
+          # NS2.0 build of Quonfig.Sdk under .NET Framework 4.8 on windows-latest, and under the
+          # net8.0 host on ubuntu-latest.
+          dotnet test tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
+            --configuration Release \
+            --framework "$TEST_HOST_TFM" \
+            --no-build \
+            --logger "trx;LogFileName=test-results-${{ matrix.os }}-${{ matrix.tfm }}.trx"
+
+      - name: Format check (dotnet format --verify-no-changes)
+        if: matrix.tfm == 'net8.0' && runner.os == 'Linux'
+        working-directory: sdk-net
+        run: dotnet format --verify-no-changes --severity warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.tfm }}
+          path: sdk-net/tests/**/TestResults/*.trx
+          if-no-files-found: ignore

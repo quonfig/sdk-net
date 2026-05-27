@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;netstandard2.0</TargetFrameworks>
+    <RootNamespace>Quonfig.Sdk</RootNamespace>
+    <AssemblyName>Quonfig.Sdk</AssemblyName>
+    <PackageId>Quonfig.Sdk</PackageId>
+    <Title>Quonfig .NET SDK</Title>
+    <Description>Quonfig SDK for .NET — feature flags and configuration as files in git. Bootstrap scaffold; no public surface yet.</Description>
+    <PackageTags>quonfig;feature-flags;configuration;feature-management</PackageTags>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="System.Threading.Channels" />
+  </ItemGroup>
+
+</Project>
