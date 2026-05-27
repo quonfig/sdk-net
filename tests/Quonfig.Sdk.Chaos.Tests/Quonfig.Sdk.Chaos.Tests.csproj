@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Chaos tests run against a live toxiproxy + api-delivery (FIXTURE_DIR mode).
+      net8.0-only on purpose: the chaos harness needs SocketsHttpHandler defaults and
+      docker; .NET Framework 4.8 adds no value here. The library proper still ships
+      netstandard2.0; this is a chaos-only verification dial.
+    -->
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- The chaos runner is a test driver; mainline analyzers don't apply cleanly to a
+         polling-loop / docker-orchestrating shape. Each suppression below is intentional:
+           CA1707  snake_case test method names; xUnit test discovery uses them.
+           CA2007  ConfigureAwait noise in tests; no SynchronizationContext here.
+           CA1031  chaos boundary catches Exception by design — a chaos run must survive arbitrary errors.
+           CA1812  internal test helper types are instantiated via xUnit reflection.
+           CA1303  diagnostic strings are not user-facing.
+           CA1305/CA1307  test code; invariant culture is implicit.
+           CA1510  ArgumentNullException.ThrowIfNull isn't on netstandard2.0 — kept terse.
+           CA1849  CancellationTokenSource.Cancel() in test teardown is intentional.
+           CA1861  inline arrays in test setup beat static-readonly noise.
+           CA2000  Quonfig and HttpContent disposal is handled in finally; analyzer false positive.
+           CA2234  Uri-typed PostAsync is more ceremony than the base-URL + path concat is worth.
+           CA1062  external callers don't reach the test method directly; xUnit drives it. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1031;CA1812;CA1303;CA1305;CA1307;CA1308;CA1510;CA1849;CA1861;CA1865;CA2000;CA2234;CA1062</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Xunit.SkippableFact" />
+    <PackageReference Include="YamlDotNet" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Quonfig.Sdk\Quonfig.Sdk.csproj" />
+  </ItemGroup>
+
+</Project>
