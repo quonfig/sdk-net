@@ -9,6 +9,8 @@
     <!-- System.Text.Json is in-box on net8.0; for netstandard2.0 the PackageReference brings the implementation. -->
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="System.Threading.Channels" Version="8.0.0" />
+    <!-- ImmutableDictionary backs ConfigStore. In-box on net8.0; PackageReference brings it to NS2.0. -->
+    <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
   </ItemGroup>
 
