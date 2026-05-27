@@ -93,10 +93,10 @@ public sealed class QuonfigOptions
     /// <summary>Layer 1 SSE read watchdog. Defaults to 90s. Pass <see cref="TimeSpan.Zero"/> to disable.</summary>
     public TimeSpan SseReadTimeout { get; set; } = TimeSpan.FromSeconds(90);
 
-    /// <summary>Whether to collect per-evaluation summary telemetry. Reserved for qfg-zp7i.12.</summary>
+    /// <summary>Whether to collect per-evaluation summary telemetry. Defaults to <c>true</c>.</summary>
     public bool CollectEvaluationSummaries { get; set; } = true;
 
-    /// <summary>Granularity of context telemetry uploads. Reserved for qfg-zp7i.12.</summary>
+    /// <summary>Granularity of context telemetry uploads. Defaults to <see cref="Sdk.ContextUploadMode.ShapesOnly"/>.</summary>
     public ContextUploadMode ContextUploadMode { get; set; } = ContextUploadMode.ShapesOnly;
 
     /// <summary>
