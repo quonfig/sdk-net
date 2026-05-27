@@ -481,6 +481,8 @@ public sealed class Quonfig : IQuonfig
             streamUrls: streams,
             sdkKey: _opts.SdkKey!,
             onEnvelope: env => OnSseEnvelope(env),
+            onConnect: OnSseConnect,
+            onDisconnect: OnSseDisconnect,
             readTimeout: _opts.SseReadTimeout,
             messageHandler: _opts.HttpMessageHandler,
             logger: _logger);
@@ -504,6 +506,25 @@ public sealed class Quonfig : IQuonfig
         {
             // Shutdown path.
         }
+    }
+
+    private void OnSseConnect()
+    {
+        // 200-OK edge from the SSE worker. Tell the fallback poller SSE is live and flip
+        // the customer-visible ConnectionState. If Layer 2 happened to be engaged, the
+        // SetSseConnected(true) call triggers its disengage path.
+        _fallbackPoller?.SetSseConnected(true);
+        UpdateConnectionState(Sdk.ConnectionState.Connected);
+    }
+
+    private void OnSseDisconnect()
+    {
+        // Stream torn down (EOF, watchdog, IO error). Arm the FallbackPoller's disconnect
+        // timer so Layer 2 can engage if SSE doesn't come back within the threshold, and
+        // surface Disconnected to OnConnectionStateChange listeners so chaos probes and
+        // customer code can observe real outages (no longer log-scraping required).
+        _fallbackPoller?.SetSseConnected(false);
+        UpdateConnectionState(Sdk.ConnectionState.Disconnected);
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(

@@ -92,7 +92,11 @@ internal sealed class ChaosProbe
 
     /// <summary>
     /// Called by the connection-state event handler on every transition. Maps sdk-net's
-    /// <see cref="Sdk.ConnectionState"/> onto the chaos-grammar vocabulary.
+    /// <see cref="Sdk.ConnectionState"/> onto the chaos-grammar vocabulary. Now that
+    /// <see cref="Sdk.Transport.SseClient"/> fires <c>onDisconnect</c> on every stream-end
+    /// (qfg-zp7i.20), each <see cref="Sdk.ConnectionState.Disconnected"/> edge counts as a
+    /// Layer 1 worker restart so the chaos metric assertions can observe short flaps that
+    /// never emit a log line.
     /// </summary>
     public void OnConnectionState(Sdk.ConnectionState next)
     {
@@ -109,7 +113,13 @@ internal sealed class ChaosProbe
                     _fallbackActive = true;
                     break;
                 case Sdk.ConnectionState.Disconnected:
-                    _state = State.Disconnected;
+                    // SSE Layer 1 is between attempts — use the chaos-grammar
+                    // "reconnecting" state (sdk-net's Disconnected matches Layer 1
+                    // gap-between-attempts, not "everything broken"). Count this as
+                    // a Layer 1 worker restart; the SDK no longer needs log-scraping
+                    // to surface short SSE blips.
+                    _state = State.Reconnecting;
+                    _restartLayer1++;
                     break;
                 case Sdk.ConnectionState.Initializing:
                 default:

@@ -56,6 +56,8 @@ public sealed class SseClient : IDisposable
     private readonly string _authHeader;
     private readonly string _sdkVersionHeader;
     private readonly Action<ConfigEnvelope> _onEnvelope;
+    private readonly Action? _onConnect;
+    private readonly Action? _onDisconnect;
     private readonly TimeSpan _readTimeout;
     private readonly TimeSpan _initialBackoff;
     private readonly TimeSpan _maxBackoff;
@@ -81,6 +83,16 @@ public sealed class SseClient : IDisposable
     /// <param name="sdkKey">SDK key used as the password in HTTP Basic auth (<c>username=1</c>).</param>
     /// <param name="onEnvelope">Delegate invoked with each decoded <see cref="ConfigEnvelope"/>.
     /// Atomic-swap into the resolver is the caller's responsibility.</param>
+    /// <param name="onConnect">Optional delegate invoked after every 200-OK status edge — i.e.
+    /// each time a new SSE stream comes up. Paired one-to-one with <paramref name="onDisconnect"/>.
+    /// Callers wire this into the Quonfig instance to flip the <see cref="Supervisor.FallbackPoller"/>
+    /// back into "SSE connected" and update <see cref="ConnectionState"/> to
+    /// <see cref="ConnectionState.Connected"/>.</param>
+    /// <param name="onDisconnect">Optional delegate invoked exactly when a previously-fired
+    /// <paramref name="onConnect"/> tears down (stream EOF, watchdog dispose, IO error). Never
+    /// fires without a preceding <paramref name="onConnect"/>. Lets the surrounding Quonfig
+    /// flip <see cref="Supervisor.FallbackPoller"/> back to "SSE disconnected" so the
+    /// threshold timer arms and Layer 2 can engage if the outage outlives it.</param>
     /// <param name="readTimeout">Layer 1 watchdog timeout. Defaults to <see cref="DefaultReadTimeout"/>.
     /// Pass <see cref="TimeSpan.Zero"/> to disable.</param>
     /// <param name="initialBackoff">Initial reconnect delay. Defaults to <see cref="DefaultInitialBackoff"/>.</param>
@@ -92,6 +104,8 @@ public sealed class SseClient : IDisposable
         IEnumerable<Uri> streamUrls,
         string sdkKey,
         Action<ConfigEnvelope> onEnvelope,
+        Action? onConnect = null,
+        Action? onDisconnect = null,
         TimeSpan? readTimeout = null,
         TimeSpan? initialBackoff = null,
         TimeSpan? maxBackoff = null,
@@ -120,6 +134,8 @@ public sealed class SseClient : IDisposable
         }
         _streamUrls = list;
         _onEnvelope = onEnvelope;
+        _onConnect = onConnect;
+        _onDisconnect = onDisconnect;
         _readTimeout = readTimeout ?? DefaultReadTimeout;
         _initialBackoff = initialBackoff ?? DefaultInitialBackoff;
         _maxBackoff = maxBackoff ?? DefaultMaxBackoff;
@@ -254,19 +270,46 @@ public sealed class SseClient : IDisposable
 #else
             var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 #endif
+            // Fire onConnect on the 200-OK edge BEFORE we start reading bytes — the surrounding
+            // Quonfig uses this to flip the FallbackPoller back to "connected". Paired with the
+            // onDisconnect call in the finally so consumers always see a clean connect→disconnect
+            // sequence even if ParseStreamAsync returns without consuming a single byte.
+            bool firedConnect = false;
             try
             {
+                FireSafe(_onConnect, "onConnect");
+                firedConnect = true;
                 return await ParseStreamAsync(body, _onEnvelope, _readTimeout, _logger, cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
             {
                 body.Dispose();
+                if (firedConnect)
+                {
+                    FireSafe(_onDisconnect, "onDisconnect");
+                }
             }
         }
         finally
         {
             response.Dispose();
+        }
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "A misbehaving connect/disconnect handler must not tear down the reconnect loop.")]
+    private void FireSafe(Action? handler, string name)
+    {
+        if (handler is null) return;
+        try
+        {
+            handler();
+        }
+        catch (Exception ex) when (!(ex is OperationCanceledException))
+        {
+            _logger.LogWarning(ex, "SSE: {Name} handler threw: {Message}", name, ex.Message);
         }
     }
 

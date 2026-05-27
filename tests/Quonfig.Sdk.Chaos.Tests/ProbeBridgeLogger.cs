@@ -46,34 +46,15 @@ internal sealed class ProbeBridgeLogger : ILogger
         var levelText = logLevel.ToString().ToLowerInvariant();
         _probe.Log(levelText, message);
 
-        // Distinguish two flavors of "Layer 1 worker restart" the SDK logs today, because they
-        // have different observability consequences for the chaos probe:
-        //   * SSE drop  — SSE connection ended unexpectedly, state should flip to "reconnecting".
-        //   * Callback throw — user code threw inside a callback, SDK caught and recovered;
-        //     state stays "connected" (the SSE worker never actually disconnected).
-        // Both increment worker_restart_total layer=1; only the first moves connectionState.
-        if (IsSseDropSignal(message))
-        {
-            _probe.RecordSseDrop();
-        }
-        else if (IsCallbackThrowSignal(message))
+        // SSE drops are now reported through the SDK's OnConnectionStateChange event
+        // (qfg-zp7i.20) — the probe counts those in ChaosProbe.OnConnectionState. The
+        // remaining log-only signal is user callbacks throwing inside the SDK boundary:
+        // the SDK catches and logs at warning level, no connection state edge fires, and
+        // the chaos metric must still observe the recovery.
+        if (IsCallbackThrowSignal(message))
         {
             _probe.IncRestartLayer1();
         }
-    }
-
-    /// <summary>
-    /// SSE-worker restart signals: connection ended, refused, or timed out. The SDK logs these
-    /// via <see cref="Sdk.Transport.SseClient"/>; if it ever wires a real connection-state
-    /// callback the probe can drop this scrape.
-    /// </summary>
-    private static bool IsSseDropSignal(string message)
-    {
-        if (message.Contains("read watchdog fired", StringComparison.OrdinalIgnoreCase)) return true;
-        if (message.Contains("SSE: transport error", StringComparison.OrdinalIgnoreCase)) return true;
-        if (message.Contains("SSE: connect timeout", StringComparison.OrdinalIgnoreCase)) return true;
-        if (message.Contains("SSE: non-200 status", StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
     }
 
     /// <summary>

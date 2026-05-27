@@ -223,6 +223,93 @@ public sealed class SseClientTests
     }
 
     [Fact]
+    public async Task RunAsync_FiresOnConnectAfter200AndOnDisconnectWhenStreamEnds()
+    {
+        using var server = WireMockServer.Start();
+        // 200 OK with a tiny body that EOFs immediately — the connect edge must fire
+        // after status, the disconnect edge after the parser returns.
+        server
+            .Given(Request.Create().WithPath("/api/v2/sse/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "text/event-stream")
+                .WithBody(": welcome\n\n"));
+
+        int connectCount = 0;
+        int disconnectCount = 0;
+        var order = new ConcurrentQueue<string>();
+
+        using var sse = new SseClient(
+            streamUrls: new[] { new Uri(server.Urls[0]) },
+            sdkKey: SdkKey,
+            onEnvelope: _ => { },
+            onConnect: () => { Interlocked.Increment(ref connectCount); order.Enqueue("connect"); },
+            onDisconnect: () => { Interlocked.Increment(ref disconnectCount); order.Enqueue("disconnect"); },
+            readTimeout: TimeSpan.FromSeconds(5),
+            initialBackoff: TimeSpan.FromSeconds(10));  // long backoff so we don't loop
+
+        using var cts = new CancellationTokenSource();
+        var runTask = sse.RunAsync(cts.Token);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (Volatile.Read(ref disconnectCount) == 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+        cts.Cancel();
+        try { await runTask; } catch (OperationCanceledException) { }
+
+        connectCount.Should().BeGreaterThanOrEqualTo(1, "onConnect must fire after 200 OK");
+        disconnectCount.Should().BeGreaterThanOrEqualTo(1,
+            "onDisconnect must fire when the stream ends (EOF)");
+        // Sequence must alternate connect → disconnect → connect → disconnect.
+        var seq = order.ToArray();
+        seq.Should().NotBeEmpty();
+        seq[0].Should().Be("connect", "the first edge must be a connect");
+        // Each connect must be paired with a disconnect by the end of the run.
+        seq.Count(s => s == "connect").Should().Be(seq.Count(s => s == "disconnect"),
+            "every connect must pair with a disconnect");
+    }
+
+    [Fact]
+    public async Task RunAsync_DoesNotFireConnectEdgesWhenStatusIsNot200()
+    {
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/sse/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(503));
+
+        int connectCount = 0;
+        int disconnectCount = 0;
+
+        using var sse = new SseClient(
+            streamUrls: new[] { new Uri(server.Urls[0]) },
+            sdkKey: SdkKey,
+            onEnvelope: _ => { },
+            onConnect: () => Interlocked.Increment(ref connectCount),
+            onDisconnect: () => Interlocked.Increment(ref disconnectCount),
+            readTimeout: TimeSpan.FromSeconds(5),
+            initialBackoff: TimeSpan.FromSeconds(10));
+
+        using var cts = new CancellationTokenSource();
+        var runTask = sse.RunAsync(cts.Token);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while (!server.LogEntries.Any() && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+        await Task.Delay(150);
+        cts.Cancel();
+        try { await runTask; } catch (OperationCanceledException) { }
+
+        server.LogEntries.ToList().Should().NotBeEmpty("the client must have hit the server");
+        connectCount.Should().Be(0,
+            "onConnect must NOT fire when the server returns a non-200 status");
+        disconnectCount.Should().Be(0,
+            "onDisconnect must NOT fire if onConnect never fired");
+    }
+
+    [Fact]
     public void Constructor_RejectsEmptyStreamUrls()
     {
         Action act = () =>
