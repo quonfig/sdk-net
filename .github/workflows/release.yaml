@@ -1,0 +1,143 @@
+name: Release
+
+# Tag-triggered: pushing a tag like v0.0.1 publishes that exact ref to
+# nuget.org. No tag = no publish. The job verifies the tag matches
+# Directory.Build.props <Version> on the tagged commit, so version drift
+# can never silently ship.
+#
+# All four packages go out in lock-step from one tag; if any push fails
+# the whole job fails loud.
+#   Quonfig.Sdk
+#   Quonfig.Sdk.AspNetCore
+#   Quonfig.Sdk.Extensions.Logging
+#   Quonfig.Sdk.Serilog
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          path: sdk-net
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Verify tag matches Directory.Build.props <Version>
+        working-directory: sdk-net
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          props_version="$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' Directory.Build.props | head -n1)"
+          echo "tag=${tag_version} props=${props_version}"
+          if [ "$tag_version" != "$props_version" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match Directory.Build.props <Version>=${props_version}"
+            exit 1
+          fi
+
+      - name: Restore
+        working-directory: sdk-net
+        run: dotnet restore
+
+      - name: Pack all four packages (lock-step)
+        working-directory: sdk-net
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          for proj in \
+            src/Quonfig.Sdk/Quonfig.Sdk.csproj \
+            src/Quonfig.Sdk.AspNetCore/Quonfig.Sdk.AspNetCore.csproj \
+            src/Quonfig.Sdk.Extensions.Logging/Quonfig.Sdk.Extensions.Logging.csproj \
+            src/Quonfig.Sdk.Serilog/Quonfig.Sdk.Serilog.csproj
+          do
+            echo "::group::dotnet pack $proj"
+            dotnet pack "$proj" \
+              --configuration Release \
+              --no-restore \
+              --output artifacts
+            echo "::endgroup::"
+          done
+          echo "Produced artifacts:"
+          ls -1 artifacts
+
+      - name: Verify all four .nupkg + .snupkg present at the tagged version
+        working-directory: sdk-net
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          missing=0
+          for pkg in \
+            Quonfig.Sdk \
+            Quonfig.Sdk.AspNetCore \
+            Quonfig.Sdk.Extensions.Logging \
+            Quonfig.Sdk.Serilog
+          do
+            for ext in nupkg snupkg; do
+              f="artifacts/${pkg}.${tag_version}.${ext}"
+              if [ ! -f "$f" ]; then
+                echo "::error::missing $f"
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" != "0" ]; then exit 1; fi
+
+      - name: Publish to nuget.org (lock-step)
+        working-directory: sdk-net
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NUGET_API_KEY:-}" ]; then
+            echo "::error::NUGET_API_KEY secret not set in 'release' environment"
+            exit 1
+          fi
+          # --skip-duplicate makes re-runs of the same tag idempotent.
+          # `dotnet nuget push` picks up the sibling .snupkg automatically
+          # when both files share the same id+version stem, so a single
+          # push per package covers both the package and its symbols.
+          for pkg in \
+            Quonfig.Sdk \
+            Quonfig.Sdk.AspNetCore \
+            Quonfig.Sdk.Extensions.Logging \
+            Quonfig.Sdk.Serilog
+          do
+            tag_version="${GITHUB_REF_NAME#v}"
+            echo "::group::dotnet nuget push ${pkg}.${tag_version}.nupkg"
+            dotnet nuget push "artifacts/${pkg}.${tag_version}.nupkg" \
+              --api-key "$NUGET_API_KEY" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+            echo "::endgroup::"
+          done
+
+      - name: Create GitHub Release
+        working-directory: sdk-net
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ -f CHANGELOG.md ]; then
+            notes=$(awk -v v="$version" '
+              $0 ~ "^## " v " "{flag=1; next}
+              /^## /{flag=0}
+              flag
+            ' CHANGELOG.md)
+          else
+            notes="Release ${GITHUB_REF_NAME}"
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "${notes:-Release ${GITHUB_REF_NAME}}" \
+            --repo "${GITHUB_REPOSITORY}"
