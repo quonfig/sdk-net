@@ -31,6 +31,12 @@ public sealed class DatadirWatcherTests : IDisposable
         catch (UnauthorizedAccessException) { }
     }
 
+    // File.WriteAllTextAsync does not exist on .NET Framework 4.8 (one of the
+    // test host TFMs on the NS2.0 matrix cell). Wrap the sync API; latency
+    // doesn't matter in a filesystem test fixture.
+    private static Task WriteAllTextCompatAsync(string path, string contents) =>
+        Task.Run(() => File.WriteAllText(path, contents));
+
     [Fact]
     public async Task Start_Returns_False_When_Datadir_Does_Not_Exist()
     {
@@ -61,7 +67,7 @@ public sealed class DatadirWatcherTests : IDisposable
         watcher.Start().Should().BeTrue("the datadir is present");
 
         // Write a new config file inside the workspace.
-        await File.WriteAllTextAsync(Path.Combine(_root, "configs", "new.config.json"), "{\"key\":\"x\"}");
+        await WriteAllTextCompatAsync(Path.Combine(_root, "configs", "new.config.json"), "{\"key\":\"x\"}");
 
         bool got = await fired.WaitAsync(TimeSpan.FromMilliseconds(100 + 1000));
         got.Should().BeTrue("OnChange should fire within debounce + tolerance after the file is written");
@@ -88,7 +94,7 @@ public sealed class DatadirWatcherTests : IDisposable
         // Burst of writes — must coalesce.
         for (int i = 0; i < 10; i++)
         {
-            await File.WriteAllTextAsync(Path.Combine(_root, "configs", $"f{i}.config.json"), "{\"key\":\"x\"}");
+            await WriteAllTextCompatAsync(Path.Combine(_root, "configs", $"f{i}.config.json"), "{\"key\":\"x\"}");
         }
 
         // Wait for the debounce to elapse + tolerance.
@@ -110,7 +116,7 @@ public sealed class DatadirWatcherTests : IDisposable
             onError: _ => { });
 
         watcher.Start().Should().BeTrue();
-        await File.WriteAllTextAsync(Path.Combine(_root, "configs", "a.config.json"), "{\"key\":\"x\"}");
+        await WriteAllTextCompatAsync(Path.Combine(_root, "configs", "a.config.json"), "{\"key\":\"x\"}");
 
         // Dispose before the debounce window elapses.
         await watcher.DisposeAsync();
@@ -150,7 +156,7 @@ public sealed class DatadirWatcherTests : IDisposable
             onError: _ => { });
 
         watcher.Start().Should().BeTrue();
-        await File.WriteAllTextAsync(Path.Combine(_root, "configs", "blocking.config.json"), "{\"k\":1}");
+        await WriteAllTextCompatAsync(Path.Combine(_root, "configs", "blocking.config.json"), "{\"k\":1}");
 
         callbackStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("the debounced callback must start before we test Dispose");
 

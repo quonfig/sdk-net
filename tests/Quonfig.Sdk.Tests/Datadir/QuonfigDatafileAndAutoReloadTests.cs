@@ -33,6 +33,12 @@ public sealed class QuonfigDatafileAndAutoReloadTests : IDisposable
         catch (UnauthorizedAccessException) { }
     }
 
+    // File.WriteAllTextAsync does not exist on .NET Framework 4.8 (one of the
+    // test host TFMs on the NS2.0 matrix cell). Wrap the sync API; latency
+    // doesn't matter in a filesystem test fixture.
+    private static Task WriteAllTextCompatAsync(string path, string contents) =>
+        Task.Run(() => File.WriteAllText(path, contents));
+
     private static string StringConfig(string key, string value) =>
         $$"""
           {
@@ -62,7 +68,7 @@ public sealed class QuonfigDatafileAndAutoReloadTests : IDisposable
     {
         var envelope = EnvelopeOf("production", ("greeting", "hello-from-file"));
         var path = Path.Combine(_root, "envelope.json");
-        await File.WriteAllTextAsync(path, JsonSerializer.Serialize(envelope));
+        await WriteAllTextCompatAsync(path, JsonSerializer.Serialize(envelope));
 
         await using var client = new Quonfig(new QuonfigOptions
         {
@@ -136,7 +142,7 @@ public sealed class QuonfigDatafileAndAutoReloadTests : IDisposable
     {
         var dir = Path.Combine(_root, "configs");
         Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(Path.Combine(dir, filename), contents);
+        await WriteAllTextCompatAsync(Path.Combine(dir, filename), contents);
     }
 
     [Fact]
@@ -189,7 +195,7 @@ public sealed class QuonfigDatafileAndAutoReloadTests : IDisposable
         // EVERY file unparseable so the load throws on empty datadir.
         Directory.Delete(Path.Combine(_root, "configs"), recursive: true);
         Directory.CreateDirectory(Path.Combine(_root, "configs"));
-        await File.WriteAllTextAsync(Path.Combine(_root, "configs", "broken.json"), "{not json");
+        await WriteAllTextCompatAsync(Path.Combine(_root, "configs", "broken.json"), "{not json");
 
         // Wait long enough for any reload to have happened.
         await Task.Delay(TimeSpan.FromMilliseconds(100 + 800));
