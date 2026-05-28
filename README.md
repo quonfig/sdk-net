@@ -2,13 +2,31 @@
 
 .NET SDK for [Quonfig](https://quonfig.com) — feature flags and configuration as files in git.
 
-> **Status:** Bootstrap scaffold (v0.0.1). The public client surface, evaluation engine, transport,
-> SSE watchdog, supervisor, telemetry, ASP.NET Core integration, and ILogger / Serilog filters all
-> land in subsequent beads under epic **qfg-zp7i**. See `project/plans/sdk-net.md` for the full plan.
+[![NuGet](https://img.shields.io/nuget/v/Quonfig.Sdk.svg)](https://www.nuget.org/packages/Quonfig.Sdk)
 
-## Artifacts (planned)
+## Install
 
-This repo will publish four NuGet packages in lock-step from a single tag.
+```bash
+dotnet add package Quonfig.Sdk
+```
+
+Companion packages (install only the ones you need):
+
+```bash
+dotnet add package Quonfig.Sdk.AspNetCore
+dotnet add package Quonfig.Sdk.Extensions.Logging
+dotnet add package Quonfig.Sdk.Serilog
+```
+
+Or via `<PackageReference>`:
+
+```xml
+<PackageReference Include="Quonfig.Sdk" Version="0.0.1" />
+```
+
+## Packages
+
+This repo publishes four NuGet packages in lock-step from a single tag.
 
 | Package                              | Purpose                                                                                                |
 |--------------------------------------|--------------------------------------------------------------------------------------------------------|
