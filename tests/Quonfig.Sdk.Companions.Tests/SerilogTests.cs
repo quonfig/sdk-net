@@ -1,9 +1,9 @@
 using System.IO;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Quonfig.Sdk.Serilog;
 using Serilog.Core;
 using Serilog.Events;
-using Quonfig.Sdk.Serilog;
 using Xunit;
 
 namespace Quonfig.Sdk.Companions.Tests;
