@@ -144,6 +144,25 @@ public sealed class QuonfigTests : IDisposable
     }
 
     [Fact]
+    public async Task DatadirMode_OnConfigChangeOption_InvokedOnLoad()
+    {
+        // The OnConfigChange option (qfg-3e6d.1) mirrors sdk-java's onConfigUpdate(Runnable):
+        // a callback supplied at construction is subscribed to the OnConfigChange event and so
+        // fires when an envelope is installed — including the synchronous initial datadir load.
+        WriteManifest("production");
+        WriteFile("configs", "a.config.json", StringConfig("greeting", "hello"));
+
+        var fired = false;
+        var opts = DatadirOptions();
+        opts.OnConfigChange = () => fired = true;
+
+        await using var client = new Quonfig(opts);
+        await client.InitAsync();
+
+        fired.Should().BeTrue("the OnConfigChange option must be wired to the config-change event");
+    }
+
+    [Fact]
     public async Task DatadirMode_MissingKey_OnNoDefaultThrow_Throws()
     {
         WriteManifest("production");

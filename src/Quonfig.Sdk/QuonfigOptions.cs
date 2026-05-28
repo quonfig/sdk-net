@@ -114,6 +114,15 @@ public sealed class QuonfigOptions
     /// </summary>
     public string? LoggerKey { get; set; }
 
+    /// <summary>
+    /// Optional callback fired after every envelope install (initial load and each subsequent
+    /// SSE / fallback / datadir-watcher refresh). Mirrors sdk-java's <c>onConfigUpdate(Runnable)</c>
+    /// and sdk-go's <c>WithOnConfigUpdate</c>: a convenience way to register a config-change
+    /// listener at construction. Equivalent to subscribing to the <see cref="Quonfig.OnConfigChange"/>
+    /// event before the first load. Subscribers must not throw.
+    /// </summary>
+    public Action? OnConfigChange { get; set; }
+
     /// <summary>Optional logger. Defaults to a no-op logger.</summary>
     public ILogger? Logger { get; set; }
 

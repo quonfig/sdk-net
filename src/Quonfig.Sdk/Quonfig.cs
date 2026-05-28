@@ -94,6 +94,14 @@ public sealed class Quonfig : IQuonfig
 
         _effectiveEnvironment = options.Environment;
 
+        // Subscribe the convenience callback before any load so the initial (synchronous, in
+        // datadir/datafile mode) envelope install fires it. Mirrors sdk-java registering
+        // options.onConfigUpdate() at construction.
+        if (options.OnConfigChange is not null)
+        {
+            OnConfigChange += options.OnConfigChange;
+        }
+
         if (!string.IsNullOrEmpty(options.Datadir))
         {
             InitDatadir(options.Datadir!);
