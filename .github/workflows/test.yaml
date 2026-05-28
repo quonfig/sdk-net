@@ -76,6 +76,18 @@ jobs:
             --no-build \
             --logger "trx;LogFileName=test-results-${{ matrix.os }}-${{ matrix.tfm }}.trx"
 
+      - name: Test companion packages (AspNetCore, Extensions.Logging, Serilog)
+        # Quonfig.Sdk.AspNetCore targets net8.0 only, so the companion test
+        # project runs on net8.0 hosts only. This step covers the gap surfaced
+        # by the qfg-zp7i epic verification on 2026-05-28.
+        if: matrix.tfm == 'net8.0'
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          dotnet test tests/Quonfig.Sdk.Companions.Tests/Quonfig.Sdk.Companions.Tests.csproj \
+            --configuration Release \
+            --logger "trx;LogFileName=companion-test-results-${{ matrix.os }}-${{ matrix.tfm }}.trx"
+
       - name: Format check (dotnet format --verify-no-changes)
         if: matrix.tfm == 'net8.0' && runner.os == 'Linux'
         working-directory: sdk-net
