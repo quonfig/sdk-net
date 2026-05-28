@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -8,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Quonfig.Sdk;
 using Quonfig.Sdk.Transport;
 using Quonfig.Sdk.Wire;
@@ -15,6 +17,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Xunit;
+using MelLogLevel = Microsoft.Extensions.Logging.LogLevel;
 
 namespace Quonfig.Sdk.Tests.Transport;
 
@@ -96,6 +99,39 @@ public sealed class SseClientTests
         elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
             "watchdog with 100ms timeout must trip well under 2s");
         stalling.Disposed.Should().BeTrue("watchdog must call Stream.Dispose on stall");
+    }
+
+    [Fact]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Globalization", "CA1307:Specify StringComparison for clarity",
+        Justification = "ASCII-only substring; ordinal and culture both match.")]
+    public async Task ParseStreamAsync_LogsWarningWhenWatchdogDisposeThrows()
+    {
+        using var throwing = new ThrowingDisposeStream();
+        var recorder = new RecordingLogger();
+
+        try
+        {
+            await SseClient.ParseStreamAsync(
+                throwing,
+                _ => { },
+                readTimeout: TimeSpan.FromMilliseconds(100),
+                logger: recorder,
+                cancellationToken: CancellationToken.None);
+        }
+        catch (Exception)
+        {
+            // Watchdog disposed the stream mid-read: surface or swallow, both OK.
+        }
+
+        // Operators need a signal when the dispose-callback swallows an exception.
+        var disposeWarnings = recorder.Entries
+            .Where(e => e.Level == MelLogLevel.Warning
+                && e.Exception is InvalidOperationException
+                && e.Message.Contains("dispose"))
+            .ToList();
+        disposeWarnings.Should().NotBeEmpty(
+            "watchdog dispose-callback catch must log a best-effort warning on the way out");
     }
 
     [Fact]
@@ -395,6 +431,114 @@ public sealed class SseClientTests
                 }
             }
             base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// Read blocks forever; Dispose throws. Used to prove the watchdog
+    /// dispose-callback's bare-catch surfaces a warning log when the dispose
+    /// itself fails (the read still unblocks because the semaphore is released
+    /// before the throw).
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Usage", "CA2213:Disposable fields should be disposed",
+        Justification = "Semaphore is disposed via a local alias inside the Dispose override before the throw; analyzer can't trace it.")]
+    private sealed class ThrowingDisposeStream : Stream
+    {
+        private SemaphoreSlim? _disposed = new(0, 1);
+        public bool DisposeAttempted { get; private set; }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            _disposed?.Wait();
+            throw new ObjectDisposedException(nameof(ThrowingDisposeStream));
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            var sem = _disposed;
+            if (sem != null)
+            {
+                await sem.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            throw new ObjectDisposedException(nameof(ThrowingDisposeStream));
+        }
+
+#if NET8_0_OR_GREATER
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            return new ValueTask<int>(ReadAsync(buffer.ToArray(), 0, buffer.Length, cancellationToken));
+        }
+#endif
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && !DisposeAttempted)
+            {
+                DisposeAttempted = true;
+                var sem = _disposed;
+                _disposed = null;
+                if (sem != null)
+                {
+                    // Release first so the in-flight read can unblock and the
+                    // parser can return — only the watchdog's dispose call is
+                    // expected to see the throw.
+                    sem.Release();
+                    sem.Dispose();
+                }
+                throw new InvalidOperationException("simulated dispose failure");
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>Capture-only ILogger; records every Log call for assertions.</summary>
+    private sealed class RecordingLogger : ILogger
+    {
+        public sealed class Entry
+        {
+            public Entry(MelLogLevel level, string message, Exception? exception)
+            {
+                Level = level;
+                Message = message;
+                Exception = exception;
+            }
+            public MelLogLevel Level { get; }
+            public string Message { get; }
+            public Exception? Exception { get; }
+        }
+
+        private readonly object _gate = new();
+        private readonly List<Entry> _entries = new();
+
+        public IReadOnlyList<Entry> Entries
+        {
+            get { lock (_gate) { return _entries.ToArray(); } }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(MelLogLevel logLevel) => true;
+        public void Log<TState>(MelLogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            lock (_gate)
+            {
+                _entries.Add(new Entry(logLevel, formatter(state, exception), exception));
+            }
         }
     }
 

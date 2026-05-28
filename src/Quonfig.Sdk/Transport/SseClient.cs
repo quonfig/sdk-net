@@ -378,9 +378,19 @@ public sealed class SseClient : IDisposable
                 {
                     body.Dispose();
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // Best-effort: the read loop is already on its way out.
+                    // Best-effort: the read loop is already on its way out, but
+                    // give operators a signal that the dispose itself failed.
+                    try
+                    {
+                        logger.LogWarning(ex,
+                            "SSE: watchdog body.Dispose() threw — {Message}", ex.Message);
+                    }
+                    catch
+                    {
+                        // Logger itself failed; nothing left to do.
+                    }
                 }
             });
             watchdog.CancelAfter(readTimeout);
