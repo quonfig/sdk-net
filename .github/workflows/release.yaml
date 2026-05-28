@@ -1,12 +1,19 @@
 name: Release
 
 # Tag-triggered: pushing a tag like v0.0.1 publishes that exact ref to
-# nuget.org. No tag = no publish. The job verifies the tag matches
-# Directory.Build.props <Version> on the tagged commit, so version drift
-# can never silently ship.
+# nuget.org via OIDC Trusted Publishing. No tag = no publish.
 #
-# All four packages go out in lock-step from one tag; if any push fails
-# the whole job fails loud.
+# Two-job shape (matches sdk-ruby's release.yml pattern):
+#   1. `test` job — full matrix on the TAGGED commit. Same shape as
+#      test.yaml so a red test on the tag blocks publish, even if the
+#      tag was pushed off a branch that had previously gone green on
+#      a different SHA.
+#   2. `publish` job — needs: test. Verifies tag matches
+#      Directory.Build.props <Version>, packs all four packages
+#      lock-step, exchanges the GitHub OIDC token for a short-lived
+#      NuGet API key (no long-lived secret), pushes all four packages.
+#
+# Packages published in lock-step from one tag:
 #   Quonfig.Sdk
 #   Quonfig.Sdk.AspNetCore
 #   Quonfig.Sdk.Extensions.Logging
@@ -18,12 +25,83 @@ on:
       - 'v*'
 
 jobs:
+  test:
+    name: Test (${{ matrix.os }} / ${{ matrix.tfm }}) on tagged commit
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        tfm: [net8.0, netstandard2.0]
+    steps:
+      - name: Checkout sdk-net at tag
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          path: sdk-net
+
+      - name: Checkout integration-test-data
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          repository: quonfig/integration-test-data
+          path: integration-test-data
+          ref: v2026.05.20
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        working-directory: sdk-net
+        run: dotnet restore
+
+      - name: Build (${{ matrix.tfm }})
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          dotnet build src/Quonfig.Sdk/Quonfig.Sdk.csproj \
+            --configuration Release \
+            --framework "${{ matrix.tfm }}" \
+            --no-restore
+
+          if [[ "${{ matrix.tfm }}" == "netstandard2.0" && "${{ runner.os }}" == "Windows" ]]; then
+            TEST_HOST_TFM=net48
+          else
+            TEST_HOST_TFM=net8.0
+          fi
+          echo "TEST_HOST_TFM=$TEST_HOST_TFM" >> "$GITHUB_ENV"
+
+          dotnet build tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
+            --configuration Release \
+            --framework "$TEST_HOST_TFM" \
+            --no-restore
+
+      - name: Test (-f ${{ matrix.tfm }})
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          dotnet test tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
+            --configuration Release \
+            --framework "$TEST_HOST_TFM" \
+            --no-build \
+            --logger "trx;LogFileName=test-results-${{ matrix.os }}-${{ matrix.tfm }}.trx"
+
+      - name: Test companion packages
+        if: matrix.tfm == 'net8.0'
+        working-directory: sdk-net
+        shell: bash
+        run: |
+          dotnet test tests/Quonfig.Sdk.Companions.Tests/Quonfig.Sdk.Companions.Tests.csproj \
+            --configuration Release
+
   publish:
     runs-on: ubuntu-latest
+    needs: test
     environment: release
 
     permissions:
       contents: write
+      id-token: write   # OIDC token exchange for NuGet Trusted Publishing
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -93,16 +171,20 @@ jobs:
           done
           if [ "$missing" != "0" ]; then exit 1; fi
 
+      - name: Login to NuGet via Trusted Publishing (OIDC)
+        # Exchanges the GitHub Actions OIDC token for a short-lived NuGet
+        # API key. Requires a Trusted Publisher policy on nuget.org for the
+        # `quonfig` account scoped to this repo + workflow + environment.
+        # See https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
+        uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: quonfig
+
       - name: Publish to nuget.org (lock-step)
         working-directory: sdk-net
-        env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${NUGET_API_KEY:-}" ]; then
-            echo "::error::NUGET_API_KEY secret not set in 'release' environment"
-            exit 1
-          fi
           # --skip-duplicate makes re-runs of the same tag idempotent.
           # `dotnet nuget push` picks up the sibling .snupkg automatically
           # when both files share the same id+version stem, so a single
@@ -116,7 +198,7 @@ jobs:
             tag_version="${GITHUB_REF_NAME#v}"
             echo "::group::dotnet nuget push ${pkg}.${tag_version}.nupkg"
             dotnet nuget push "artifacts/${pkg}.${tag_version}.nupkg" \
-              --api-key "$NUGET_API_KEY" \
+              --api-key "${{ steps.nuget-login.outputs.nuget-api-key }}" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
             echo "::endgroup::"
