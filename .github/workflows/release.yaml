@@ -201,7 +201,7 @@ jobs:
             tag_version="${GITHUB_REF_NAME#v}"
             echo "::group::dotnet nuget push ${pkg}.${tag_version}.nupkg"
             dotnet nuget push "artifacts/${pkg}.${tag_version}.nupkg" \
-              --api-key "${{ steps.nuget-login.outputs.nuget-api-key }}" \
+              --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
             echo "::endgroup::"
