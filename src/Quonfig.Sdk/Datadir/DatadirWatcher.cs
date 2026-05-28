@@ -230,10 +230,32 @@ public sealed class DatadirWatcher : IAsyncDisposable, IDisposable
         }
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Synchronous disposal. Prefer <see cref="DisposeAsync"/> when the caller is in an async
+    /// context. Important: this path does NOT wait for an in-flight debounced callback to
+    /// finish — the old implementation did (via <c>GetAwaiter().GetResult()</c> on
+    /// <see cref="DisposeAsync"/>), which could deadlock if the caller held a lock the callback
+    /// was also blocked on (qfg-zp7i.21). Pending callbacks observe the <c>_disposed</c> flag and
+    /// return without firing <c>onChange</c>.
+    /// </summary>
     public void Dispose()
     {
-        // Sync disposal — best-effort; the async path is preferred.
-        DisposeAsync().AsTask().GetAwaiter().GetResult();
+        FileSystemWatcher? fsw;
+        Timer? timer;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            fsw = _fsw;
+            timer = _debounceTimer;
+            _fsw = null;
+            _debounceTimer = null;
+        }
+        if (fsw is not null)
+        {
+            fsw.EnableRaisingEvents = false;
+            fsw.Dispose();
+        }
+        timer?.Dispose();
     }
 }
