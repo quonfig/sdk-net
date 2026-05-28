@@ -128,4 +128,42 @@ public sealed class DatadirWatcherTests : IDisposable
         // Second dispose must not throw.
         await watcher.DisposeAsync();
     }
+
+    /// <summary>
+    /// Regression test for qfg-zp7i.21. The sync <see cref="DatadirWatcher.Dispose"/> path must
+    /// NOT wait for an in-flight <c>OnChange</c> callback to finish — doing so re-introduces the
+    /// sync-over-async deadlock if the caller holds a lock that the callback is also blocked on.
+    /// </summary>
+    [Fact]
+    public async Task Dispose_Does_Not_Wait_For_InFlight_OnChange_Callback()
+    {
+        using var callbackStarted = new ManualResetEventSlim(false);
+        using var releaseCallback = new ManualResetEventSlim(false);
+        await using var watcher = new DatadirWatcher(
+            _root,
+            TimeSpan.FromMilliseconds(50),
+            onChange: () =>
+            {
+                callbackStarted.Set();
+                releaseCallback.Wait();
+            },
+            onError: _ => { });
+
+        watcher.Start().Should().BeTrue();
+        await File.WriteAllTextAsync(Path.Combine(_root, "configs", "blocking.config.json"), "{\"k\":1}");
+
+        callbackStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("the debounced callback must start before we test Dispose");
+
+        // Call sync Dispose from a worker thread. With the buggy sync-over-async implementation
+        // Dispose() blocks until timer.DisposeAsync()'s await completes, which itself waits for
+        // the in-flight callback to finish — and that callback is blocked on releaseCallback.
+        var disposeTask = Task.Run(() => watcher.Dispose());
+        var completed = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(2)));
+
+        // Always release so the test doesn't leak a stuck thread.
+        releaseCallback.Set();
+
+        completed.Should().BeSameAs(disposeTask, "Dispose() must return without waiting for the in-flight callback");
+        await disposeTask; // surface any exception
+    }
 }
