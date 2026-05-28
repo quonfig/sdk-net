@@ -139,9 +139,17 @@ public sealed class FallbackPollerTests
             await WaitForAsync(TimeSpan.FromMilliseconds(500), () => p.Active, "poller never engaged");
             int atEngage = Volatile.Read(ref fetches);
             p.SetSseConnected(true);
-            await WaitForAsync(TimeSpan.FromMilliseconds(500), () => !p.Active,
-                "poller never disengaged after reconnect");
+            // Wait on the disengage callback rather than `!p.Active`. The worker
+            // flips `_engaged = false` inside the lock and fires `_onDisengage`
+            // after the lock is released; on a fast runner the assertion can
+            // observe the new Active state before the callback runs. The contract
+            // under test is the callback, so we gate on it directly. Active is
+            // separately re-checked below.
+            await WaitForAsync(TimeSpan.FromMilliseconds(500),
+                () => Volatile.Read(ref disengageCount) >= 1,
+                "disengage callback never fired after reconnect");
             disengageCount.Should().Be(1, "expected exactly 1 disengage callback");
+            p.Active.Should().BeFalse("poller should be inactive once disengage fired");
             await Task.Delay(50);
             // Allow one in-flight tick to race with disengage.
             Volatile.Read(ref fetches).Should().BeLessThanOrEqualTo(atEngage + 1,
