@@ -224,6 +224,34 @@ public sealed class EvaluatorTests
     }
 
     [Fact]
+    public void SingularEnvironment_FromDeliveryWire_TakesPrecedenceOverDefault()
+    {
+        // api-delivery /api/v2/configs emits a SINGULAR "environment" object (the payload is
+        // already scoped to the SDK key's environment) instead of the plural "environments"
+        // array the datadir loader writes. The parser must read it; otherwise the env rules are
+        // dropped and the evaluator silently serves the default value. (qfg-64m9)
+        var cfg = Parse("flag.x", """
+            {
+              "id": "1",
+              "key": "flag.x",
+              "type": "feature_flag",
+              "valueType": "bool",
+              "environment": {
+                "id": "development",
+                "rules": [ { "criteria": [], "value": { "type": "bool", "value": false } } ]
+              },
+              "default": {
+                "rules": [ { "criteria": [], "value": { "type": "bool", "value": true } } ]
+              }
+            }
+            """);
+
+        var ev = new Evaluator(null);
+        // default is true, development override is false — the override must win.
+        ev.Evaluate(cfg, new ContextSet(), "development").Value!.Payload.Should().Be(false);
+    }
+
+    [Fact]
     public void InSeg_ResolvesAnotherConfigAsBoolean()
     {
         // Segment config: true iff user.email ends with @quonfig.com

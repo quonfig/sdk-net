@@ -411,12 +411,8 @@ public sealed class Quonfig : IQuonfig
 
     private void InstallDatafileEnvelope(ConfigEnvelope envelope)
     {
-        // If the caller did not pin Environment, fall back to envelope.meta.environment so the
-        // evaluator and metadata both surface the same value. Matches sdk-java parity (qfg-9hre).
-        if (string.IsNullOrEmpty(_effectiveEnvironment) && !string.IsNullOrEmpty(envelope.Meta?.Environment))
-        {
-            _effectiveEnvironment = envelope.Meta!.Environment;
-        }
+        // The meta.environment fallback now lives in InstallEnvelope so every install path
+        // (datafile, datadir, HTTP init, HTTP refresh, SSE) shares it. (qfg-64m9)
         InstallEnvelope(envelope);
         _initTcs.TrySetResult(true);
     }
@@ -685,6 +681,17 @@ public sealed class Quonfig : IQuonfig
 
     private void InstallEnvelope(ConfigEnvelope envelope)
     {
+        // If the caller did not pin Environment, fall back to envelope.meta.environment so the
+        // evaluator (and metadata) scope to the environment the payload was filtered to. In
+        // HTTP+SSE mode api-delivery scopes the payload to the SDK key's environment and sends
+        // meta.environment but no options.Environment is set; without this the evaluator runs
+        // with a null env id, never matches the singular per-config "environment" block, and
+        // silently serves the row's default rules. Matches sdk-go installEnvelope
+        // (envID = envelope.Meta.Environment) and the prior datafile-only fallback (qfg-9hre). (qfg-64m9)
+        if (string.IsNullOrEmpty(_effectiveEnvironment) && !string.IsNullOrEmpty(envelope.Meta?.Environment))
+        {
+            _effectiveEnvironment = envelope.Meta!.Environment;
+        }
         var store = _store ?? new ConfigStore();
         store.Update(envelope);
         if (_store is null)

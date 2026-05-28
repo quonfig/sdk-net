@@ -68,25 +68,43 @@ public static class ConfigRowParser
 
     private static IReadOnlyList<EvaluationEnvironment> ParseEnvironments(JsonElement el)
     {
-        if (!el.TryGetProperty("environments", out var envs) || envs.ValueKind != JsonValueKind.Array)
+        var result = new List<EvaluationEnvironment>();
+
+        // Datadir/workspace shape: a PLURAL "environments" array carrying every environment's
+        // rule set on the row.
+        if (el.TryGetProperty("environments", out var envs) && envs.ValueKind == JsonValueKind.Array)
         {
-            return Array.Empty<EvaluationEnvironment>();
-        }
-        var result = new List<EvaluationEnvironment>(envs.GetArrayLength());
-        foreach (var envEl in envs.EnumerateArray())
-        {
-            var envId = TryGetString(envEl, "id") ?? "";
-            var rules = new List<Rule>();
-            if (envEl.TryGetProperty("rules", out var rulesEl) && rulesEl.ValueKind == JsonValueKind.Array)
+            foreach (var envEl in envs.EnumerateArray())
             {
-                foreach (var ruleEl in rulesEl.EnumerateArray())
-                {
-                    rules.Add(ParseRule(ruleEl));
-                }
+                result.Add(ParseEnvironment(envEl));
             }
-            result.Add(new EvaluationEnvironment(envId, rules));
         }
-        return result;
+
+        // Delivery shape: api-delivery /api/v2/configs already scopes the payload to the SDK
+        // key's environment and emits a SINGULAR "environment" object ({id, rules}) instead of
+        // the plural array. Parse it too, or HTTP+SSE mode silently drops every per-environment
+        // override and falls back to the row's default rules. Mirrors sdk-go's ConfigResponse
+        // .Environment -> single-element Environments slice (config.go / runtime_eval.go). (qfg-64m9)
+        if (el.TryGetProperty("environment", out var env) && env.ValueKind == JsonValueKind.Object)
+        {
+            result.Add(ParseEnvironment(env));
+        }
+
+        return result.Count == 0 ? Array.Empty<EvaluationEnvironment>() : result;
+    }
+
+    private static EvaluationEnvironment ParseEnvironment(JsonElement envEl)
+    {
+        var envId = TryGetString(envEl, "id") ?? "";
+        var rules = new List<Rule>();
+        if (envEl.TryGetProperty("rules", out var rulesEl) && rulesEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var ruleEl in rulesEl.EnumerateArray())
+            {
+                rules.Add(ParseRule(ruleEl));
+            }
+        }
+        return new EvaluationEnvironment(envId, rules);
     }
 
     private static Rule ParseRule(JsonElement el)
