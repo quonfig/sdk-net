@@ -173,13 +173,16 @@ jobs:
 
       - name: Login to NuGet via Trusted Publishing (OIDC)
         # Exchanges the GitHub Actions OIDC token for a short-lived NuGet
-        # API key. Requires a Trusted Publisher policy on nuget.org for the
-        # `quonfig` account scoped to this repo + workflow + environment.
+        # API key. The `user` input is the POLICY CREATOR's nuget.org
+        # username (the human account signed in when the policy was made),
+        # NOT the Package Owner the policy targets. The policy targets
+        # packages owned by `quonfig`; the policy was created by
+        # `jeff-quonfig`.
         # See https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
         uses: NuGet/login@v1
         id: nuget-login
         with:
-          user: quonfig
+          user: jeff-quonfig
 
       - name: Publish to nuget.org (lock-step)
         working-directory: sdk-net
