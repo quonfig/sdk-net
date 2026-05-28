@@ -834,7 +834,7 @@ public sealed class Quonfig : IQuonfig
         }
 
         var matchReason = MapMatchReason(match);
-        var variant = VariantFor(matchReason, match.RuleIndex, weightedIndex: -1);
+        var variant = VariantFor(matchReason, match.RuleIndex, match.WeightedValueIndex);
         return new EvaluationDetails<T>(
             typed,
             matchReason,
@@ -905,6 +905,10 @@ public sealed class Quonfig : IQuonfig
         if (match.RuleIndex >= 0 && (reason == Reason.TargetingMatch || reason == Reason.Split))
         {
             m["ruleIndex"] = match.RuleIndex;
+        }
+        if (reason == Reason.Split && match.WeightedValueIndex >= 0)
+        {
+            m["weightedValueIndex"] = match.WeightedValueIndex;
         }
         if (!string.IsNullOrEmpty(_effectiveEnvironment)) m["environment"] = _effectiveEnvironment;
         return m;

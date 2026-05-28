@@ -18,6 +18,13 @@ public sealed class EvaluationMatch
     /// <summary>Index of the matched rule within its rule set, or -1 when nothing matched.</summary>
     public int RuleIndex { get; }
 
+    /// <summary>
+    /// 0-based index of the resolved entry within a weighted-values bucket, or -1 when the matched
+    /// value was not a weighted resolution. A value &gt;= 0 is what promotes the reason to
+    /// <see cref="Sdk.Reason.Split"/>.
+    /// </summary>
+    public int WeightedValueIndex { get; }
+
     /// <summary>Why this match was produced. <see cref="Sdk.Reason.Default"/> when no rule matched.</summary>
     public Reason Reason { get; }
 
@@ -34,6 +41,7 @@ public sealed class EvaluationMatch
         bool isMatch,
         Value? value,
         int ruleIndex,
+        int weightedValueIndex,
         Reason reason,
         string configId,
         string configKey,
@@ -42,18 +50,21 @@ public sealed class EvaluationMatch
         IsMatch = isMatch;
         Value = value;
         RuleIndex = ruleIndex;
+        WeightedValueIndex = weightedValueIndex;
         Reason = reason;
         ConfigId = configId;
         ConfigKey = configKey;
         ValueType = valueType;
     }
 
-    /// <summary>Builds a successful match.</summary>
+    /// <summary>Builds a successful match. <paramref name="weightedValueIndex"/> is -1 unless the
+    /// value came from a resolved weighted-values bucket.</summary>
     public static EvaluationMatch Matched(
-        Value value, int ruleIndex, Reason reason, string configId, string configKey, ValueType valueType) =>
-        new(true, value, ruleIndex, reason, configId, configKey, valueType);
+        Value value, int ruleIndex, int weightedValueIndex, Reason reason,
+        string configId, string configKey, ValueType valueType) =>
+        new(true, value, ruleIndex, weightedValueIndex, reason, configId, configKey, valueType);
 
     /// <summary>Builds a "no rule matched" match; the caller falls back to its own default.</summary>
     public static EvaluationMatch NoMatch(string configId, string configKey, ValueType valueType) =>
-        new(false, null, -1, Reason.Default, configId, configKey, valueType);
+        new(false, null, -1, -1, Reason.Default, configId, configKey, valueType);
 }

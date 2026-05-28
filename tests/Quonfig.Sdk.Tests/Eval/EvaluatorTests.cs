@@ -61,6 +61,73 @@ public sealed class EvaluatorTests
     }
 
     [Fact]
+    public void Evaluate_StaticReason_WhenOnlyCriterionIsAlwaysTrue()
+    {
+        // An ALWAYS_TRUE-only config has no real targeting, so the canonical reason is STATIC —
+        // matching sdk-go's hasTargetingRules() and integration-test-data telemetry.yaml
+        // ("reason is STATIC for feature flag with only ALWAYS_TRUE rules"). qfg-q7yz.
+        var cfg = Parse("always.true", """
+            {
+              "id": "2",
+              "key": "always.true",
+              "type": "feature_flag",
+              "valueType": "bool",
+              "default": {
+                "rules": [ { "criteria": [ { "operator": "ALWAYS_TRUE" } ], "value": { "type": "bool", "value": true } } ]
+              }
+            }
+            """);
+
+        var ev = new Evaluator(null);
+        var m = ev.Evaluate(cfg, new ContextSet(), "");
+
+        m.IsMatch.Should().BeTrue();
+        m.Value!.Payload.Should().Be(true);
+        m.RuleIndex.Should().Be(0);
+        m.Reason.Should().Be(Reason.Static);
+    }
+
+    [Fact]
+    public void Evaluate_SplitReason_WhenWeightedValueResolved()
+    {
+        // A weighted-values resolution reports reason SPLIT with the chosen bucket index, matching
+        // sdk-go and integration-test-data. With no hashByPropertyName the resolver deterministically
+        // picks bucket 0. qfg-q7yz.
+        var cfg = Parse("of.weighted", """
+            {
+              "id": "3",
+              "key": "of.weighted",
+              "type": "config",
+              "valueType": "string",
+              "default": {
+                "rules": [
+                  {
+                    "criteria": [ { "operator": "ALWAYS_TRUE" } ],
+                    "value": {
+                      "type": "weighted_values",
+                      "value": {
+                        "weightedValues": [
+                          { "weight": 50, "value": { "type": "string", "value": "variant-a" } },
+                          { "weight": 50, "value": { "type": "string", "value": "variant-b" } }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+            """);
+
+        var ev = new Evaluator(null);
+        var m = ev.Evaluate(cfg, new ContextSet(), "");
+
+        m.IsMatch.Should().BeTrue();
+        m.Value!.Payload.Should().Be("variant-a");
+        m.WeightedValueIndex.Should().Be(0);
+        m.Reason.Should().Be(Reason.Split);
+    }
+
+    [Fact]
     public void Evaluate_TargetingMatch_WhenCriteriaMatch()
     {
         var cfg = Parse("flag.internal", """
@@ -123,7 +190,11 @@ public sealed class EvaluatorTests
         var m = ev.Evaluate(cfg, ctx, "");
         m.Value!.Payload.Should().Be(false);
         m.RuleIndex.Should().Be(1);
-        m.Reason.Should().Be(Reason.Static);
+        // The config HAS a targeting rule, so falling through to a catch-all rule is TARGETING_MATCH,
+        // not STATIC — canonical sdk-go behaviour and integration-test-data telemetry.yaml
+        // ("reason is TARGETING_MATCH when config has targeting rules but evaluation falls through").
+        // qfg-q7yz.
+        m.Reason.Should().Be(Reason.TargetingMatch);
     }
 
     [Fact]

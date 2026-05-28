@@ -92,18 +92,66 @@ public sealed class Evaluator
 
             // Resolver expands PROVIDED, weighted-buckets, decryption, env-var coercion.
             // It throws on env-var-missing / decryption failure — let it propagate so the
-            // caller can surface the right error code.
-            var resolved = _resolver.Resolve(rule.Value, row.Key, row.ValueType, contexts);
+            // caller can surface the right error code. weightedIndex is >= 0 only when a
+            // weighted-values bucket was chosen.
+            var resolved = _resolver.Resolve(
+                rule.Value, row.Key, row.ValueType, contexts, out int weightedIndex);
 
-            // STATIC only when the very first rule has no criteria (matches sdk-java spec
-            // — see EvaluatorTest.evaluate_fallsThroughToFallbackRule_whenFirstDoesNotMatch).
-            Reason reason = (i == 0 && rule.Criteria.Count == 0) || rule.Criteria.Count == 0
-                ? Reason.Static
-                : Reason.TargetingMatch;
+            // Canonical reason (mirrors sdk-go runtime_eval.go hasTargetingRules + integration-test-data
+            // telemetry.yaml): SPLIT when a weighted bucket was resolved; otherwise STATIC only when
+            // the config has NO real targeting anywhere (every criterion absent or ALWAYS_TRUE) and
+            // the first rule won; otherwise TARGETING_MATCH — including a catch-all fallthrough inside
+            // a config that does have targeting rules. qfg-q7yz.
+            Reason reason;
+            if (weightedIndex >= 0)
+            {
+                reason = Reason.Split;
+            }
+            else if (i == 0 && !HasTargetingRules(row))
+            {
+                reason = Reason.Static;
+            }
+            else
+            {
+                reason = Reason.TargetingMatch;
+            }
 
-            return EvaluationMatch.Matched(resolved, i, reason, row.Id, row.Key, row.ValueType);
+            return EvaluationMatch.Matched(
+                resolved, i, weightedIndex, reason, row.Id, row.Key, row.ValueType);
         }
         return null;
+    }
+
+    /// <summary>
+    /// True if the config has any rule (in the default rule set or any environment-specific rule
+    /// set) whose criteria include a non-<c>ALWAYS_TRUE</c> operator. Mirrors sdk-go's
+    /// <c>hasTargetingRules</c>: a config that only matches via empty/ALWAYS_TRUE criteria is
+    /// "static", so its match reports <see cref="Reason.Static"/> rather than
+    /// <see cref="Reason.TargetingMatch"/>.
+    /// </summary>
+    private static bool HasTargetingRules(ConfigRow row)
+    {
+        if (AnyNonTrivial(row.DefaultRules)) return true;
+        foreach (var env in row.Environments)
+        {
+            if (AnyNonTrivial(env.Rules)) return true;
+        }
+        return false;
+    }
+
+    private static bool AnyNonTrivial(IReadOnlyList<Rule> rules)
+    {
+        foreach (var rule in rules)
+        {
+            foreach (var c in rule.Criteria)
+            {
+                if (!string.Equals(c.Operator, Operators.ALWAYS_TRUE, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private bool AllCriteriaMatch(IReadOnlyList<Criterion> criteria, ContextSet contexts)

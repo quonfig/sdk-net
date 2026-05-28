@@ -52,7 +52,18 @@ public sealed class Resolver
     /// <exception cref="QuonfigEnvVarNotSetException">ENV_VAR provided value with no matching env var (and no fallback).</exception>
     /// <exception cref="QuonfigCoercionException">Env-var string can't be coerced to <paramref name="configValueType"/>.</exception>
     /// <exception cref="QuonfigDecryptionException">Decrypt key config is missing/unresolvable, or AES-GCM fails.</exception>
-    public Value Resolve(Value candidate, string configKey, ValueType configValueType, ContextSet contexts)
+    public Value Resolve(Value candidate, string configKey, ValueType configValueType, ContextSet contexts) =>
+        Resolve(candidate, configKey, configValueType, contexts, out _);
+
+    /// <summary>
+    /// Same as <see cref="Resolve(Value, string, ValueType, ContextSet)"/> but also reports the
+    /// 0-based weighted-bucket index chosen when <paramref name="candidate"/> is a weighted-values
+    /// value (-1 otherwise). The caller uses this to promote the evaluation reason to
+    /// <see cref="Reason.Split"/>.
+    /// </summary>
+    public Value Resolve(
+        Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
+        out int weightedValueIndex)
     {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(candidate);
@@ -64,6 +75,8 @@ public sealed class Resolver
         if (contexts is null) throw new ArgumentNullException(nameof(contexts));
 #endif
 
+        weightedValueIndex = -1;
+
         if (candidate.Type == ValueType.Provided)
         {
             return ResolveProvided(candidate, configKey, configValueType);
@@ -71,7 +84,7 @@ public sealed class Resolver
 
         if (candidate.Type == ValueType.WeightedValues)
         {
-            return ResolveWeighted(candidate, configKey, configValueType, contexts);
+            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex);
         }
 
         if (candidate.Confidential && !string.IsNullOrEmpty(candidate.DecryptWith))
@@ -102,8 +115,11 @@ public sealed class Resolver
 
     // ----- Weighted -----
 
-    private Value ResolveWeighted(Value candidate, string configKey, ValueType configValueType, ContextSet contexts)
+    private Value ResolveWeighted(
+        Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
+        out int weightedValueIndex)
     {
+        weightedValueIndex = -1;
         if (candidate.Payload is not WeightedValuesPayload wv) return candidate;
         if (wv.Variants.Count == 0) return candidate;
 
@@ -116,20 +132,22 @@ public sealed class Resolver
         double threshold = fraction * total;
 
         long running = 0;
-        WeightedVariant? picked = null;
-        foreach (var v in wv.Variants)
+        int pickedIndex = -1;
+        for (int i = 0; i < wv.Variants.Count; i++)
         {
-            running += v.Weight;
+            running += wv.Variants[i].Weight;
             if (running >= threshold)
             {
-                picked = v;
+                pickedIndex = i;
                 break;
             }
         }
-        picked ??= wv.Variants[0];
+        if (pickedIndex < 0) pickedIndex = 0;
+        weightedValueIndex = pickedIndex;
 
-        // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc.
-        return Resolve(picked.Value, configKey, configValueType, contexts);
+        // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc. The bucket
+        // index is the one we just picked — inner resolution doesn't change it.
+        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts);
     }
 
     private static double UserFraction(string configKey, string? hashByPropertyName, ContextSet contexts)
