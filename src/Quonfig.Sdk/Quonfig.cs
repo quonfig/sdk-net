@@ -469,13 +469,20 @@ public sealed class Quonfig : IQuonfig
     private async Task RunHttpInitAsync()
     {
         HttpTransport? transport = null;
+        // Scope initCts outside the try so the catch clauses can distinguish a real init
+        // timeout (initCts fired, or HttpClient.Timeout fired at the same per-request limit)
+        // from a fast-fail transport error. The race between initCts and the underlying
+        // HttpClient.Timeout — both set to _opts.InitTimeout — means either can win, and the
+        // resulting exception type varies (OperationCanceledException vs HttpTransport's
+        // QuonfigException wrap). Surface either as QuonfigInitTimeoutException so the
+        // cross-SDK initialization_timeout contract holds. (qfg-zp7i.15-followup)
+        using var initCts = new CancellationTokenSource(_opts.InitTimeout);
         try
         {
             var uris = _opts.ApiUrls.Select(u => new Uri(u, UriKind.Absolute));
             transport = new HttpTransport(uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler);
             _httpTransport = transport;
 
-            using var initCts = new CancellationTokenSource(_opts.InitTimeout);
             var envelope = await transport.FetchAsync(null, initCts.Token).ConfigureAwait(false);
             if (envelope is null)
             {
@@ -493,9 +500,43 @@ public sealed class Quonfig : IQuonfig
         }
         catch (Exception ex) when (ex is QuonfigException || ex is HttpRequestException || ex is JsonException)
         {
+            // Two paths land here as "init timed out":
+            //   1. initCts.IsCancellationRequested: caller-CT fired before we caught the wrap.
+            //   2. HttpClient.Timeout fired inside SendAsync (per-URL timeout = _opts.InitTimeout),
+            //      surfacing a TaskCanceledException that HttpTransport.FetchAsync wraps in a
+            //      bare QuonfigException ("HTTP timeout contacting …") because the OCE's
+            //      cancellation token is the HttpClient's INTERNAL timeout-CTS, not initCts.
+            //      The inner-exception chain ends in an OperationCanceledException, which is
+            //      how we recognize it.
+            // Either way, the cross-SDK initialization_timeout contract requires
+            // QuonfigInitTimeoutException — not bare QuonfigException.
+            if (initCts.IsCancellationRequested || ChainContainsOperationCancelled(ex))
+            {
+                HandleInitFailure(
+                    new QuonfigInitTimeoutException(
+                        FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}"), ex));
+                return;
+            }
             HandleInitFailure(
                 new QuonfigException($"Quonfig client initialization failed: {ex.Message}", ex));
         }
+    }
+
+    /// <summary>
+    /// Walks the inner-exception chain of <paramref name="ex"/>; returns true if any node is an
+    /// <see cref="OperationCanceledException"/> (which includes <see cref="TaskCanceledException"/>).
+    /// Used by <see cref="RunHttpInitAsync"/> to detect init-timeout failures that have been wrapped
+    /// in <see cref="QuonfigException"/> by <c>HttpTransport.FetchAsync</c>.
+    /// </summary>
+    private static bool ChainContainsOperationCancelled(Exception? ex)
+    {
+        var depth = 0;
+        while (ex is not null && depth++ < 8)
+        {
+            if (ex is OperationCanceledException) return true;
+            ex = ex.InnerException;
+        }
+        return false;
     }
 
     private void HandleInitFailure(QuonfigException error)
