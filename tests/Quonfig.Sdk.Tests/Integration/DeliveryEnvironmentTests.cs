@@ -2,12 +2,6 @@
 // Regenerate with:
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
-//
-// LOCAL PATCH (qfg-pinh, 2026-05-29): case "explicit environment pin ..." was edited in place to
-// the decided delivery-mode contract (meta.environment authoritative; pin ignored). The upstream
-// YAML still encodes the pre-decision expectation; until the cross-SDK gate regeneration lands
-// (qfg-pinh: rewrite delivery_environment.yaml case 2 + regenerate all 6 targets), a plain
-// `npm run generate` will revert this case — reconcile with the YAML before regenerating.
 
 using System;
 using System.Threading.Tasks;
@@ -45,14 +39,8 @@ public sealed class DeliveryEnvironmentTests
         Assert.Equal(false, client.GetBool("flag.env-scoped"));
     }
 
-    // qfg-pinh (Jeff, 2026-05-29, Option A): in delivery mode meta.environment is AUTHORITATIVE
-    // and an explicit pin is datadir-only / ignored. The original generated case asserted the
-    // pre-decision "pin wins" behavior (expected false). meta.environment="staging" has no matching
-    // env block on the row, so eval now falls to default (true), and the pin="development" is ignored.
-    // This case is patched in place to the decided contract pending the cross-SDK gate regeneration
-    // tracked in qfg-pinh (delivery_environment.yaml case 2 rewrite + regenerate all 6 targets).
     [Fact(DisplayName = "explicit environment pin is ignored in delivery mode (meta.environment authoritative)")]
-    public async Task ExplicitEnvironmentPinIsIgnoredInDeliveryMode()
+    public async Task ExplicitEnvironmentPinIsIgnoredInDeliveryModeMetaEnvironmentAuthoritative()
     {
         using var server = WireMockServer.Start();
         server
@@ -60,7 +48,7 @@ public sealed class DeliveryEnvironmentTests
             .RespondWith(Response.Create().WithStatusCode(200)
                 .WithHeader("Content-Type", "application/json")
                 .WithHeader("ETag", "\"v1\"")
-                .WithBody("{\"meta\":{\"version\":\"v1\",\"environment\":\"staging\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}"));
+                .WithBody("{\"meta\":{\"version\":\"v1\",\"environment\":\"development\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}"));
 
         await using var client = new Quonfig(new QuonfigOptions
         {
@@ -69,13 +57,11 @@ public sealed class DeliveryEnvironmentTests
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
-            Environment = "development",
+            Environment = "staging",
         });
         await client.InitAsync();
 
-        // meta.environment="staging" is authoritative; the row's only env block is "development",
-        // which no longer matches, so eval falls to the row default (true). The pin is ignored.
-        Assert.Equal(true, client.GetBool("flag.env-scoped"));
+        Assert.Equal(false, client.GetBool("flag.env-scoped"));
     }
 
     [Fact(DisplayName = "config without environment block falls back to default in delivery mode")]
