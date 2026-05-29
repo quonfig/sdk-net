@@ -55,6 +55,15 @@ public sealed class Quonfig : IQuonfig
     private readonly QuonfigOptions _opts;
     private readonly ILogger _logger;
     private string? _effectiveEnvironment;
+
+    /// <summary>
+    /// True when the client loads over HTTP/SSE against an SDK key (delivery mode), as opposed to
+    /// datadir/datafile mode. In delivery mode the server's <c>meta.environment</c> is authoritative:
+    /// the active environment is determined by the SDK key, so an explicit <see cref="QuonfigOptions.Environment"/>
+    /// pin (or <c>QUONFIG_ENVIRONMENT</c>) is ignored for evaluation and only emits a WARN at init.
+    /// Matches sdk-go, where the pin feeds only the datadir loader and eval never branches on it.
+    /// </summary>
+    private readonly bool _isDeliveryMode;
     private readonly TaskCompletionSource<bool> _initTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _stateLock = new();
 
@@ -117,6 +126,17 @@ public sealed class Quonfig : IQuonfig
         else
         {
             ValidateHttpMode(options);
+            _isDeliveryMode = true;
+            // Delivery (SDK-key) mode: the server's meta.environment is authoritative, so an
+            // explicit Environment pin (or QUONFIG_ENVIRONMENT) is ignored for evaluation. Warn
+            // once at init so a mis-set pin doesn't silently no-op. Matches sdk-go, where the pin
+            // only feeds the datadir loader and eval always uses the installed envelope's env.
+            if (!string.IsNullOrEmpty(options.Environment))
+            {
+                _logger.LogWarning(
+                    "quonfig: environment '{Environment}' was set but the client is in delivery (SDK-key) mode; the active environment is determined by the SDK key, so this setting is ignored (it applies only when loading from a local data dir)",
+                    options.Environment);
+            }
             // Install an empty store immediately so getters called before init finishes (or
             // after init fails under OnInitFailure.ReturnDefaults) surface FlagNotFound for any
             // key — letting the OnNoDefault policy fire — instead of a "not yet initialized"
@@ -681,14 +701,21 @@ public sealed class Quonfig : IQuonfig
 
     private void InstallEnvelope(ConfigEnvelope envelope)
     {
-        // If the caller did not pin Environment, fall back to envelope.meta.environment so the
-        // evaluator (and metadata) scope to the environment the payload was filtered to. In
-        // HTTP+SSE mode api-delivery scopes the payload to the SDK key's environment and sends
-        // meta.environment but no options.Environment is set; without this the evaluator runs
-        // with a null env id, never matches the singular per-config "environment" block, and
-        // silently serves the row's default rules. Matches sdk-go installEnvelope
-        // (envID = envelope.Meta.Environment) and the prior datafile-only fallback (qfg-9hre). (qfg-64m9)
-        if (string.IsNullOrEmpty(_effectiveEnvironment) && !string.IsNullOrEmpty(envelope.Meta?.Environment))
+        // Environment resolution (cross-SDK contract, qfg-pinh):
+        //   - Delivery (HTTP/SSE SDK-key) mode: the server's meta.environment is AUTHORITATIVE.
+        //     Always adopt it, overwriting any Environment pin — the pin is datadir-only and was
+        //     warned-about at init. This matches sdk-go, where eval never branches on the pin and
+        //     always uses the installed envelope's meta.environment.
+        //   - Datadir/datafile mode: meta.environment already carries the pin (DatadirLoader sets
+        //     meta.environment = pin) or the datafile's own slug. Keep the prior "only when the
+        //     pin is empty" fallback so an explicit pin still wins over a datafile's embedded slug.
+        // Without adopting meta.environment the evaluator runs with a null env id, never matches the
+        // singular per-config "environment" block, and silently serves the row's default rules. (qfg-64m9)
+        if (_isDeliveryMode)
+        {
+            _effectiveEnvironment = envelope.Meta?.Environment;
+        }
+        else if (string.IsNullOrEmpty(_effectiveEnvironment) && !string.IsNullOrEmpty(envelope.Meta?.Environment))
         {
             _effectiveEnvironment = envelope.Meta!.Environment;
         }

@@ -1,6 +1,9 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -76,5 +79,109 @@ public sealed class HttpDeliveryEnvironmentTests
 
         var details = client.GetBoolDetails("flag.delivery");
         details.Metadata["environment"].Should().Be("development");
+    }
+
+    [Fact]
+    public async Task HttpMode_IgnoresEnvironmentPin_MetaEnvironmentIsAuthoritative()
+    {
+        // Cross-SDK contract (qfg-pinh): in delivery mode the server's meta.environment is
+        // authoritative; an explicit Environment pin (datadir-only) must be IGNORED. The wire
+        // payload's development override is false, the row default is true, and meta.environment
+        // is "development". A mismatched pin ("staging") must NOT change evaluation: we expect the
+        // development override (false), not the default (true), and not a staging-scoped null.
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"v1\"")
+                .WithBody(DeliveryEnvelopeJson()));
+
+        await using var client = new Quonfig(new QuonfigOptions
+        {
+            SdkKey = SdkKey,
+            ApiUrls = new[] { server.Urls[0] },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromSeconds(5),
+            // Mismatched pin — must be ignored in delivery mode.
+            Environment = "staging",
+        });
+        await client.InitAsync();
+
+        // meta.environment ("development") wins: development override = false.
+        client.GetBool("flag.delivery").Should().Be(false);
+
+        var details = client.GetBoolDetails("flag.delivery");
+        details.Metadata["environment"].Should().Be("development");
+    }
+
+    [Fact]
+    public async Task HttpMode_WarnsWhenEnvironmentPinnedInDeliveryMode()
+    {
+        // qfg-pinh: setting a pin in delivery mode is a no-op for evaluation, so the SDK must WARN
+        // once at init through its logger to make the mis-configuration visible.
+        var sink = new CapturingLogger();
+
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"v1\"")
+                .WithBody(DeliveryEnvelopeJson()));
+
+        await using var client = new Quonfig(new QuonfigOptions
+        {
+            SdkKey = SdkKey,
+            ApiUrls = new[] { server.Urls[0] },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromSeconds(5),
+            Environment = "staging",
+            Logger = sink,
+        });
+        await client.InitAsync();
+
+        sink.Warnings.Should().ContainSingle(m =>
+            m.Contains("environment 'staging' was set", StringComparison.Ordinal)
+            && m.Contains("delivery (SDK-key) mode", StringComparison.Ordinal)
+            && m.Contains("determined by the SDK key", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Minimal <see cref="ILogger"/> that captures Warning-level messages for assertions. Records
+    /// only the formatted message text; scope/state shape is irrelevant for these tests.
+    /// </summary>
+    private sealed class CapturingLogger : ILogger
+    {
+        public ConcurrentQueue<string> WarningQueue { get; } = new();
+
+        public IReadOnlyList<string> Warnings => new List<string>(WarningQueue);
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+            {
+                WarningQueue.Enqueue(formatter(state, exception));
+            }
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+
+            public void Dispose() { }
+        }
     }
 }
