@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.2 - 2026-05-29
+
+Per-environment override fixes for delivery (SDK-key) mode. `0.0.1` shipped without these, so per-environment config overrides were not honored when connecting via an SDK key.
+
+- Parse the singular delivery `environment` block and scope evaluation to `meta.environment` (qfg-64m9)
+- In delivery (SDK-key) mode `meta.environment` is authoritative: an explicit `Environment` pin is datadir-only and is ignored in delivery mode, with a WARN logged when one is set (qfg-pinh)
+
 ## 0.0.1 - 2026-05-27
 
 First public release of the Quonfig .NET SDK. Greenfield port of the Quonfig client targeting `net8.0` and `netstandard2.0`, published to nuget.org as a four-package family from a single tag. Tracks the [qfg-zp7i epic](https://github.com/quonfig/sdk-net/issues).
