@@ -144,9 +144,9 @@ public sealed class HttpDeliveryEnvironmentTests
         await client.InitAsync();
 
         sink.Warnings.Should().ContainSingle(m =>
-            m.Contains("environment 'staging' was set", StringComparison.Ordinal)
-            && m.Contains("delivery (SDK-key) mode", StringComparison.Ordinal)
-            && m.Contains("determined by the SDK key", StringComparison.Ordinal));
+            m.Contains("environment 'staging' was set")
+            && m.Contains("delivery (SDK-key) mode")
+            && m.Contains("determined by the SDK key"));
     }
 
     /// <summary>
