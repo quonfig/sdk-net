@@ -57,6 +57,14 @@ public sealed class Quonfig : IQuonfig
     private string? _effectiveEnvironment;
 
     /// <summary>
+    /// The global context applied as the lowest-precedence layer to every evaluation. Equals
+    /// <see cref="QuonfigOptions.GlobalContext"/> with the dev-only <c>quonfig-user.email</c>
+    /// context merged UNDER it (customer keys win on collision) when dev-context injection is
+    /// enabled and a tokens file is present. Computed once at construction.
+    /// </summary>
+    private readonly ContextSet? _globalContext;
+
+    /// <summary>
     /// True when the client loads over HTTP/SSE against an SDK key (delivery mode), as opposed to
     /// datadir/datafile mode. In delivery mode the server's <c>meta.environment</c> is authoritative:
     /// the active environment is determined by the SDK key, so an explicit <see cref="QuonfigOptions.Environment"/>
@@ -102,6 +110,7 @@ public sealed class Quonfig : IQuonfig
         ValidateModes(options);
 
         _effectiveEnvironment = options.Environment;
+        _globalContext = ResolveGlobalContext(options);
 
         // Subscribe the convenience callback before any load so the initial (synchronous, in
         // datadir/datafile mode) envelope install fires it. Mirrors sdk-java registering
@@ -392,6 +401,38 @@ public sealed class Quonfig : IQuonfig
             throw new ArgumentException(
                 "QuonfigOptions.ApiUrls must contain at least one URL", nameof(opts));
         }
+    }
+
+    /// <summary>
+    /// Computes the lowest-precedence global context: the customer's <see cref="QuonfigOptions.GlobalContext"/>
+    /// with the dev-only <c>quonfig-user.email</c> context merged UNDER it (customer keys win on
+    /// collision). Resolution of the dev-context knob mirrors the cross-SDK contract:
+    /// explicit <see cref="QuonfigOptions.EnableQuonfigUserContext"/> wins; else the
+    /// <c>QUONFIG_DEV_CONTEXT</c> env var (<c>"true"</c>/<c>"false"</c>); else default ON. The loader
+    /// no-ops without a tokens file, so default-on is inert in production.
+    /// </summary>
+    private ContextSet? ResolveGlobalContext(QuonfigOptions options)
+    {
+        if (!DevContextEnabled(options)) return options.GlobalContext;
+
+        var devContext = DevContext.Load(options.ApiUrls, options.EnvLookup, _logger);
+        if (devContext is null) return options.GlobalContext;
+
+        // Customer-supplied keys win on collision: customer GlobalContext is the overlay.
+        return MergeContexts(devContext, options.GlobalContext);
+    }
+
+    private static bool DevContextEnabled(QuonfigOptions options)
+    {
+        if (options.EnableQuonfigUserContext.HasValue)
+        {
+            return options.EnableQuonfigUserContext.Value;
+        }
+        var lookup = options.EnvLookup ?? System.Environment.GetEnvironmentVariable;
+        var env = lookup("QUONFIG_DEV_CONTEXT");
+        if (string.Equals(env, "true", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(env, "false", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
     }
 
     private void InitDatadir(string datadir)
@@ -811,7 +852,7 @@ public sealed class Quonfig : IQuonfig
             return ErrorDetails(key, fallback, ErrorCode.FlagNotFound, FormattableString.Invariant($"config \"{key}\" not found"));
         }
 
-        var effective = MergeContexts(_opts.GlobalContext, contexts) ?? new ContextSet();
+        var effective = MergeContexts(_globalContext, contexts) ?? new ContextSet();
 
         EvaluationMatch match;
         try

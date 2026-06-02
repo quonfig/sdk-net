@@ -134,4 +134,15 @@ public sealed class QuonfigOptions
 
     /// <summary>Optional env-var lookup override (testability). Defaults to <see cref="Environment.GetEnvironmentVariable(string)"/>.</summary>
     public Func<string, string?>? EnvLookup { get; set; }
+
+    /// <summary>
+    /// Whether to auto-inject the dev-only <c>quonfig-user.email</c> evaluation context, read from
+    /// the per-domain tokens file written by <c>qfg login</c> (<c>~/.quonfig/tokens.json</c> for
+    /// production). <c>null</c> (the default) means unset: resolution falls through to the
+    /// <c>QUONFIG_DEV_CONTEXT</c> env var (<c>"true"</c>/<c>"false"</c>), then defaults to ON. The
+    /// loader no-ops when no tokens file exists, so default-on is inert in production. Set
+    /// explicitly to <c>false</c> to force it off regardless of the env var. Mirrors sdk-node's
+    /// <c>enableQuonfigUserContext</c>.
+    /// </summary>
+    public bool? EnableQuonfigUserContext { get; set; }
 }
