@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.3 - 2026-06-02
+
+- **Token-file dev-context loader, default-on (qfg-bw7g.7).** New `DevContext` loader mirrors sdk-node: it reads the per-domain qfg-login tokens file (`~/.quonfig/tokens.json`, or `tokens-<domain>.json` for non-prod domains derived from `ApiUrls`), parses `userEmail`, and returns a `{ "quonfig-user": { email } }` context. No-ops when the file is missing or has no `userEmail`; logs one warning on parse error. Adds a nullable `EnableQuonfigUserContext` option (`null` = unset). Resolution: explicit option wins, else `QUONFIG_DEV_CONTEXT` env (`true`/`false`), else default `true`. Injection merges **under** the customer `GlobalContext`, so customer keys win on collision. Default-on is inert in production (no tokens file). Config home is overridable via `QUONFIG_CONFIG_HOME`. No new NuGet dependency (System.Text.Json only). Set `EnableQuonfigUserContext = false` or `QUONFIG_DEV_CONTEXT=false` to opt out.
+
 ## 0.0.2 - 2026-05-29
 
 Per-environment override fixes for delivery (SDK-key) mode. `0.0.1` shipped without these, so per-environment config overrides were not honored when connecting via an SDK key.
