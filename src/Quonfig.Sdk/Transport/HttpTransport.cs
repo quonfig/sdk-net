@@ -34,6 +34,14 @@ public sealed class HttpTransport : IDisposable
     /// <summary>Default per-request timeout (10s) used when no explicit value is given.</summary>
     public static readonly TimeSpan DefaultHttpTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Default per-URL config-fetch deadline (~3s) applied to a single failover leg when no
+    /// explicit value is supplied. Short enough that a hung primary fails over to the secondary
+    /// well inside a default 10s <c>InitTimeout</c>, yet long enough to tolerate a slow-but-healthy
+    /// upstream. Per-attempt only — it never touches the long-lived SSE stream.
+    /// </summary>
+    public static readonly TimeSpan DefaultConfigFetchTimeout = TimeSpan.FromSeconds(3);
+
     private const string ConfigsPath = "/api/v2/configs";
 
     private readonly IReadOnlyList<Uri> _apiUrls;
@@ -41,6 +49,7 @@ public sealed class HttpTransport : IDisposable
     private readonly string _sdkVersionHeader;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
+    private readonly TimeSpan _configFetchTimeout;
 
     /// <summary>Ordered list of base URLs (primary first, then secondaries).</summary>
     public IReadOnlyList<Uri> ApiUrls => _apiUrls;
@@ -52,20 +61,34 @@ public sealed class HttpTransport : IDisposable
     public string? LastETag { get; private set; }
 
     /// <summary>
+    /// Zero-based index into <see cref="ApiUrls"/> of the leg that served the most recent
+    /// successful fetch (HTTP 200 or 304). <c>-1</c> until the first success. Lets callers report
+    /// which endpoint resolved — <c>0</c> is the primary, <c>1</c> the secondary — so a failover
+    /// is observable. Updated only on success; an all-URLs-fail throw leaves it unchanged.
+    /// </summary>
+    public int LastResolvedIndex { get; private set; } = -1;
+
+    /// <summary>
     /// Initializes a new transport. The default constructor wires its own <see cref="HttpClient"/>;
     /// pass <paramref name="messageHandler"/> to inject one (DI / tests). Ownership of the injected
     /// handler stays with the caller — only the internally-created client is disposed.
     /// </summary>
     /// <param name="apiUrls">Ordered list of base URLs (primary first). Must be non-empty.</param>
     /// <param name="sdkKey">SDK key used as the password in HTTP Basic auth (<c>username=1</c>).</param>
-    /// <param name="timeout">Per-request timeout. Defaults to <see cref="DefaultHttpTimeout"/>.</param>
+    /// <param name="timeout">Overall per-request ceiling on the shared <see cref="HttpClient"/>.
+    /// Defaults to <see cref="DefaultHttpTimeout"/>. Bounds the whole failover walk; the tighter
+    /// <paramref name="configFetchTimeout"/> bounds each individual leg.</param>
     /// <param name="messageHandler">Optional handler for tests / DI. When provided, the caller
     /// retains ownership and is responsible for disposing it.</param>
+    /// <param name="configFetchTimeout">Per-URL deadline for a single failover leg. A hung primary
+    /// aborts after this duration so the secondary is tried within the remaining budget. Defaults to
+    /// <see cref="DefaultConfigFetchTimeout"/> (~3s) when null or non-positive.</param>
     public HttpTransport(
         IEnumerable<Uri> apiUrls,
         string sdkKey,
         TimeSpan? timeout = null,
-        HttpMessageHandler? messageHandler = null)
+        HttpMessageHandler? messageHandler = null,
+        TimeSpan? configFetchTimeout = null)
     {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(apiUrls);
@@ -94,6 +117,9 @@ public sealed class HttpTransport : IDisposable
         _httpClient = BuildClient(messageHandler);
         _ownsClient = true;
         _httpClient.Timeout = timeout ?? DefaultHttpTimeout;
+        _configFetchTimeout = configFetchTimeout is { } t && t > TimeSpan.Zero
+            ? t
+            : DefaultConfigFetchTimeout;
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -136,13 +162,22 @@ public sealed class HttpTransport : IDisposable
             var target = BuildTarget(baseUrl);
             using var request = BuildRequest(target, etag);
             HttpResponseMessage? response = null;
+            // Bound this single leg so a hung primary (accepts the connection but never responds)
+            // aborts after _configFetchTimeout instead of consuming the caller's whole budget,
+            // leaving time to reach the secondary. The linked CTS fires the EARLIER of (caller
+            // cancellation, per-URL deadline); a per-URL timeout cancels only this attempt, then
+            // the loop advances to the next URL. (qfg-7h5d.1.11)
+            using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            attemptCts.CancelAfter(_configFetchTimeout);
+            var attemptToken = attemptCts.Token;
             try
             {
-                response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, attemptToken).ConfigureAwait(false);
 
                 int sc = (int)response.StatusCode;
                 if (sc == 304)
                 {
+                    LastResolvedIndex = i;
                     return null;
                 }
                 if (sc >= 200 && sc < 300)
@@ -153,29 +188,32 @@ public sealed class HttpTransport : IDisposable
                         LastETag = responseETag;
                     }
 #if NET8_0_OR_GREATER
-                    using var bodyStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                    using var bodyStream = await response.Content.ReadAsStreamAsync(attemptToken).ConfigureAwait(false);
 #else
                     using var bodyStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 #endif
                     var envelope = await JsonSerializer
-                        .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: cancellationToken)
+                        .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: attemptToken)
                         .ConfigureAwait(false);
                     if (envelope is null)
                     {
                         throw new QuonfigException($"api-delivery at {target} returned an empty/null envelope body");
                     }
+                    LastResolvedIndex = i;
                     return envelope;
                 }
                 lastError = new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}"));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                // The CALLER cancelled (or its overall deadline elapsed) — propagate, don't fail over.
                 throw;
             }
             catch (OperationCanceledException ex)
             {
-                // HttpClient surfaces both connect timeouts and Timeout-elapsed as
-                // OperationCanceledException (or TaskCanceledException) on net8 and NS2.0.
+                // Either the per-URL deadline fired (attemptToken, caller still live) or HttpClient's
+                // own Timeout elapsed. Both surface as OperationCanceledException / TaskCanceledException
+                // on net8 and NS2.0. Treat as a per-leg timeout and advance to the next URL.
                 lastError = new QuonfigException($"HTTP timeout contacting {target}", ex);
             }
             catch (HttpRequestException ex)

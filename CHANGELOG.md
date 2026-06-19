@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Failover + canonical-ordering reliability (qfg-7h5d.1.11).** Two additive, backward-compatible hardening changes proven red→green against the shared failover + ordering chaos corpus:
+  - **Per-URL config-fetch timeout.** Each failover leg now gets its own deadline so a hung or slow primary aborts fast (~3s default) and the secondary is reached within the overall `InitTimeout`, instead of the primary starving the whole budget. Tunable via the new `QuonfigOptions.ConfigFetchTimeout` option (default 3s); applies to the initial fetch, the fallback poller, and in-band refresh.
+  - **Reject-older install guard.** The SDK now reads the monotonic `Meta.generation` watermark and installs a network envelope only if it strictly advances the held generation. A fresh client always accepts its first snapshot; an established client never regresses to an older payload (e.g. on a failover to a stale secondary), and a same-generation snapshot is a no-op. Applies to every network install path (initial fetch, fallback poller, SSE snapshot/update, refresh). Datadir/datafile installs are a local source of truth and bypass the guard.
+
 ## 1.0.0 - 2026-06-06
 
 - **Stable 1.0.0 release.** The Quonfig .NET SDK (`Quonfig.Sdk` and the

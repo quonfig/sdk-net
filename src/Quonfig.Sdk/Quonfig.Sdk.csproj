@@ -54,6 +54,20 @@
   </ItemGroup>
 
   <!--
+    Expose internal diagnostics (HeldGeneration / NetworkInstallCount / ResolvedFrom / RefreshAsync)
+    to the chaos harness so the failover + canonical-ordering rigs can observe the reject-older
+    guard and failover routing without enlarging the public API surface. (qfg-7h5d.1.11)
+  -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Quonfig.Sdk.Chaos.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Quonfig.Sdk.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!--
     netstandard2.0 only: BouncyCastle provides the AES-GCM polyfill (System.Security.Cryptography.AesGcm
     is net8.0+). Conditional so net8.0 consumers don't pick it up transitively — they get the BCL path.
   -->

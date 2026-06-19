@@ -22,12 +22,24 @@ public sealed class Meta
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorkspaceId { get; }
 
-    /// <summary>Initializes a new instance from the three fields. All are optional on the wire.</summary>
+    /// <summary>
+    /// Monotonic, per-branch commit counter (<c>git rev-list --count HEAD</c>) served by
+    /// api-delivery alongside <see cref="Version"/>. Unlike the SHA in <see cref="Version"/> — which
+    /// is unordered — a higher <see cref="Generation"/> is strictly newer, so the SDK can order two
+    /// snapshots and reject an older one (the canonical reject-older install guard). Purely additive:
+    /// servers that predate the watermark omit it and it decodes to <c>0</c>. Maps 1:1 to sdk-go's
+    /// <c>Meta.Generation</c> and sdk-java's <c>Meta.generation</c>.
+    /// </summary>
+    [JsonPropertyName("generation")]
+    public int Generation { get; }
+
+    /// <summary>Initializes a new instance from the four fields. All are optional on the wire.</summary>
     [JsonConstructor]
-    public Meta(string? version, string? environment, string? workspaceId)
+    public Meta(string? version, string? environment, string? workspaceId, int generation = 0)
     {
         Version = version;
         Environment = environment;
         WorkspaceId = workspaceId;
+        Generation = generation;
     }
 }

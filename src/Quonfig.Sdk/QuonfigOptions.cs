@@ -77,6 +77,21 @@ public sealed class QuonfigOptions
     /// <summary>How long the initial load may take before the <see cref="OnInitFailure"/> policy applies. Defaults to 10s.</summary>
     public TimeSpan InitTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Per-URL deadline for a single config-fetch attempt, applied uniformly to the initial fetch,
+    /// the fallback poller, and any in-band refresh. Each base URL in <see cref="ApiUrls"/> gets its
+    /// own deadline, so a hung primary aborts after this duration and the secondary is tried within
+    /// the remaining <see cref="InitTimeout"/> budget.
+    ///
+    /// <para>Additive and backward-compatible: the default (~3s) already makes a hung upstream fail
+    /// over, so existing callers need not set it. Raise it only if a healthy upstream legitimately
+    /// takes longer than 3s to answer; lower it to fail over even faster. A non-positive value falls
+    /// back to the default. Bounds a single attempt only — it never touches the long-lived SSE
+    /// stream, which keeps its own <see cref="SseReadTimeout"/>. Mirrors sdk-go's
+    /// <c>WithConfigFetchTimeout</c>.</para>
+    /// </summary>
+    public TimeSpan ConfigFetchTimeout { get; set; } = TimeSpan.FromSeconds(3);
+
     /// <summary>Policy when initial HTTP+SSE load exceeds <see cref="InitTimeout"/>. Defaults to <see cref="OnInitFailure.Throw"/>.</summary>
     public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Throw;
 

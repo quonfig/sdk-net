@@ -87,6 +87,19 @@ internal static class ChaosYamlLoader
         s.HttpEndpoint = AsString(Lookup(m, "http_endpoint"));
         s.WallClockSeconds = AsInt(Lookup(m, "wall_clock_seconds"), 30);
         s.UserCallback = AsString(Lookup(m, "user_callback"));
+        s.Topology = AsString(Lookup(m, "topology"));
+        if (Lookup(m, "upstreams") is YamlSequenceNode ups)
+        {
+            foreach (var u in ups)
+            {
+                if (u is not YamlMappingNode um) continue;
+                s.Upstreams.Add(new ChaosScenario.Upstream
+                {
+                    Role = AsString(Lookup(um, "role")),
+                    Generation = AsInt(Lookup(um, "generation"), 0),
+                });
+            }
+        }
         return s;
     }
 
@@ -130,6 +143,9 @@ internal static class ChaosYamlLoader
             BothDownMs = AsIntOrNull(Lookup(m, "both_down_ms")),
             SseHalfOpenAfterBytes = AsIntOrNull(Lookup(m, "sse_half_open_after_bytes")),
             SseHttpStatus = AsIntOrNull(Lookup(m, "sse_http_status")),
+            PrimaryRefusedMs = AsIntOrNull(Lookup(m, "primary_refused_ms")),
+            PrimaryHangMs = AsIntOrNull(Lookup(m, "primary_hang_ms")),
+            PrimaryLatencyMs = AsIntOrNull(Lookup(m, "primary_latency_ms")),
             Proxy = AsString(Lookup(m, "proxy")),
         };
         if (Lookup(m, "toxic") is YamlMappingNode toxic)

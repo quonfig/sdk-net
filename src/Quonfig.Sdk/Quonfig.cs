@@ -96,6 +96,28 @@ public sealed class Quonfig : IQuonfig
     private ConnectionState _lastObservedState = ConnectionState.Initializing;
     private int _closed;
 
+    /// <summary>
+    /// Serializes the reject-older guard decision with the install that follows so the two are
+    /// atomic across every network install path (initial fetch, fallback poller, SSE snapshot /
+    /// update, in-band refresh). Without this lock a concurrent SSE update and fallback fetch could
+    /// both pass the guard and install out of order. Datadir/datafile installs are a local source of
+    /// truth and bypass the guard entirely. (qfg-7h5d.1.11)
+    /// </summary>
+    private readonly object _installLock = new();
+
+    /// <summary>
+    /// The <c>Meta.generation</c> currently held — the watermark the reject-older guard compares
+    /// against. <c>-1</c> means nothing has been installed from the network yet (a fresh client
+    /// always accepts its first snapshot, even at generation 0).
+    /// </summary>
+    private int _heldGeneration = -1;
+
+    /// <summary>Count of envelopes actually installed from the network (rejected-older installs don't count).</summary>
+    private int _networkInstallCount;
+
+    /// <summary><see cref="HttpTransport.LastResolvedIndex"/> captured at the last accepted network install. <c>-1</c> until then.</summary>
+    private int _resolvedFromIndex = -1;
+
     /// <summary>Constructs a client. <see cref="InitAsync"/> must be awaited before sync getters are reliable.</summary>
     public Quonfig(QuonfigOptions options)
     {
@@ -545,7 +567,12 @@ public sealed class Quonfig : IQuonfig
         try
         {
             var uris = _opts.ApiUrls.Select(u => new Uri(u, UriKind.Absolute));
-            transport = new HttpTransport(uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler);
+            // Per-URL config-fetch timeout (qfg-7h5d.1.11): a hung primary aborts after
+            // ConfigFetchTimeout, leaving budget to reach the secondary inside InitTimeout. The
+            // same transport instance backs the fallback poller and in-band refresh, so the
+            // per-URL bound applies uniformly on every config-fetch path.
+            transport = new HttpTransport(
+                uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler, _opts.ConfigFetchTimeout);
             _httpTransport = transport;
 
             var envelope = await transport.FetchAsync(null, initCts.Token).ConfigureAwait(false);
@@ -553,7 +580,9 @@ public sealed class Quonfig : IQuonfig
             {
                 throw new QuonfigException("initial config fetch returned 304 with no prior ETag");
             }
-            InstallEnvelope(envelope);
+            // Reject-older guard runs on the initial fetch too; a fresh client always accepts the
+            // first snapshot, so this installs and records the resolved leg + held generation.
+            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
             _initTcs.TrySetResult(true);
             StartSse();
         }
@@ -692,12 +721,45 @@ public sealed class Quonfig : IQuonfig
         {
             var envelope = await transport.FetchAsync(transport.LastETag, ct).ConfigureAwait(false);
             if (envelope is null) return; // 304 — nothing changed.
-            InstallEnvelope(envelope);
+            // Reject-older guard: a fallback-poller fetch installs only if it advances the held
+            // generation. Without this, a failover to an older secondary regresses an established
+            // client (qfg-7h5d.1.11).
+            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
             _supervisor?.RecordSuccessfulRefresh();
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Shutdown path.
+        }
+    }
+
+    /// <summary>
+    /// Performs a single guarded config fetch through the shared <see cref="HttpTransport"/> and
+    /// installs the result only if it advances the held generation. Exposed to the chaos harness to
+    /// model ongoing config polling (the failover/refresh install path) for the ordering rig; it
+    /// routes through the same per-URL timeout and the same reject-older guard as every other
+    /// network path, so it exercises the real mechanism rather than a test-only shortcut. A 304 or a
+    /// rejected-older payload is a no-op. Errors are swallowed (the next tick retries); shutdown
+    /// cancellation is honored.
+    /// </summary>
+    internal async Task RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        var transport = _httpTransport;
+        if (transport is null) return;
+        try
+        {
+            var envelope = await transport.FetchAsync(transport.LastETag, cancellationToken).ConfigureAwait(false);
+            if (envelope is null) return; // 304 — nothing changed.
+            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Shutdown path.
+        }
+        catch (QuonfigException ex)
+        {
+            // All legs failed this tick; keep serving the held envelope and let the next tick retry.
+            _logger.LogDebug(ex, "quonfig: refresh fetch failed; keeping held envelope: {Message}", ex.Message);
         }
     }
 
@@ -727,7 +789,11 @@ public sealed class Quonfig : IQuonfig
     {
         try
         {
-            InstallEnvelope(envelope);
+            // Reject-older guard on the SSE initial snapshot and every SSE update: install only if
+            // it advances the held generation (qfg-7h5d.1.11). The SSE leg is its own host (it does
+            // not fail over), so the resolved index for an SSE install is left unchanged — it is not
+            // an HTTP failover leg.
+            TryInstallFromNetwork(envelope, sourceIndex: -1);
             _supervisor?.RecordSuccessfulRefresh();
             // Receiving an envelope means the SSE stream is live; update connection state and
             // tell the fallback poller it can stand down.
@@ -737,6 +803,77 @@ public sealed class Quonfig : IQuonfig
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "quonfig: SSE envelope install failed: {Message}", ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Applies the canonical reject-older rule to an envelope arriving on a network install path
+    /// (initial fetch, fallback poller, SSE snapshot / update, in-band refresh), then installs it
+    /// when accepted. The rule is the whole story — there is no source ranking:
+    /// <list type="bullet">
+    ///   <item><description>A fresh client (nothing installed yet) always accepts the first snapshot,
+    ///     even at generation 0. A stale secondary can therefore seed a fresh client, but…</description></item>
+    ///   <item><description>…an established client installs only if the incoming <c>Meta.generation</c>
+    ///     is strictly greater than the held generation. An older payload is dropped, so a late
+    ///     failover to a stale secondary can never move the client backward; a later, newer primary
+    ///     win heals forward.</description></item>
+    ///   <item><description>A same-generation snapshot is a no-op (not strictly greater), so an equal
+    ///     second leg can't re-install or flap.</description></item>
+    /// </list>
+    /// The decision and the install are taken under <see cref="_installLock"/> so they are atomic
+    /// with respect to every other network install path. Returns true if the envelope was installed.
+    /// </summary>
+    private bool TryInstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
+    {
+        lock (_installLock)
+        {
+            int incoming = envelope.Meta?.Generation ?? 0;
+            // Established client: reject anything that doesn't strictly advance the watermark
+            // (older = regression, equal = redundant no-op). A fresh client (_networkInstallCount
+            // == 0) always installs, even at generation 0.
+            if (_networkInstallCount > 0 && incoming <= _heldGeneration)
+            {
+                return false;
+            }
+            InstallEnvelope(envelope);
+            _heldGeneration = incoming;
+            _networkInstallCount++;
+            if (sourceIndex >= 0)
+            {
+                _resolvedFromIndex = sourceIndex;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Test/diagnostic: the <c>Meta.generation</c> currently held, or <c>-1</c> if no network
+    /// envelope has been installed yet. Used by the chaos ordering rig to assert the SDK holds the
+    /// higher generation and never regresses.
+    /// </summary>
+    internal int HeldGeneration { get { lock (_installLock) { return _heldGeneration; } } }
+
+    /// <summary>Test/diagnostic: count of envelopes actually installed from the network (rejected-older installs excluded).</summary>
+    internal int NetworkInstallCount { get { lock (_installLock) { return _networkInstallCount; } } }
+
+    /// <summary>
+    /// Test/diagnostic: which leg served the last accepted HTTP install — <c>"primary"</c> (index 0),
+    /// <c>"secondary"</c> (index 1), <c>"url{n}"</c> for further legs, or <c>"none"</c> before the
+    /// first install. Lets the chaos failover rig assert a failover resolved off the secondary.
+    /// </summary>
+    internal string ResolvedFrom
+    {
+        get
+        {
+            int idx;
+            lock (_installLock) { idx = _resolvedFromIndex; }
+            return idx switch
+            {
+                < 0 => "none",
+                0 => "primary",
+                1 => "secondary",
+                _ => FormattableString.Invariant($"url{idx}"),
+            };
         }
     }
 

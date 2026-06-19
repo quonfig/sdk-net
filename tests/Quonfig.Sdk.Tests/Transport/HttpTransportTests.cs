@@ -190,6 +190,64 @@ public sealed class HttpTransportTests
     }
 
     [Fact]
+    public async Task FetchAsync_PerUrlTimeout_FailsOverWhenPrimaryHangs()
+    {
+        // f02 mechanism (qfg-7h5d.1.11): a hung primary must not consume the whole budget. The
+        // primary "answers" — but only after 5s, far beyond the 300ms per-URL deadline; the
+        // secondary answers instantly. With the per-URL timeout the primary leg aborts at ~300ms
+        // and the fetch resolves off the secondary fast. WITHOUT it (the bug), the primary's 5s
+        // response would win first (LastResolvedIndex == 0) and the fetch would block ~5s — so this
+        // test asserts BOTH the resolved leg and the wall-clock bound, the two things the fix changes.
+        using var primary = WireMockServer.Start();
+        using var secondary = WireMockServer.Start();
+        primary
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(EnvelopeJson("primary-env"))
+                .WithDelay(TimeSpan.FromSeconds(5)));
+        secondary
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(EnvelopeJson("secondary-env")));
+
+        // Overall ceiling generous (10s) so the per-URL deadline — not HttpClient.Timeout — is what
+        // sheds the hung primary.
+        using var transport = new HttpTransport(
+            new[] { new Uri(primary.Urls[0]), new Uri(secondary.Urls[0]) }, SdkKey,
+            timeout: TimeSpan.FromSeconds(10),
+            configFetchTimeout: TimeSpan.FromMilliseconds(300));
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var envelope = await transport.FetchAsync(null, CancellationToken.None);
+        sw.Stop();
+
+        envelope.Should().NotBeNull();
+        envelope!.Meta!.Environment.Should().Be("secondary-env", "the hung primary must fail over to the secondary");
+        transport.LastResolvedIndex.Should().Be(1, "the secondary (index 1) served the fetch");
+        sw.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(3),
+            "failover must not wait for the primary's 5s response — the per-URL deadline sheds it at ~300ms");
+    }
+
+    [Fact]
+    public async Task FetchAsync_RecordsResolvedIndexForPrimary()
+    {
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(EnvelopeJson()));
+
+        using var transport = new HttpTransport(new[] { new Uri(server.Urls[0]) }, SdkKey);
+
+        transport.LastResolvedIndex.Should().Be(-1, "no fetch has resolved yet");
+        await transport.FetchAsync(null, CancellationToken.None);
+        transport.LastResolvedIndex.Should().Be(0, "the primary (index 0) served the fetch");
+    }
+
+    [Fact]
     public void Constructor_RejectsEmptyApiUrls()
     {
         Action act = () =>
