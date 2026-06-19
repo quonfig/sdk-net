@@ -47,10 +47,11 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          # Tracks main: the scenarios-failover/ + scenarios-ordering/ corpus this job drives only
-          # exists on main, not yet in a tag. Pin to a tag once the corpus is rev'd into one,
-          # matching test.yaml's pinning rationale.
-          ref: v2026.06.19
+          # Pinned to the corpus tag carrying the reframed o01 (fast primary wins, secondary never
+          # contacted), the new o05 (slow older primary loses to fast newer secondary), and o03 (heal
+          # forward) — the parallel-failover hedge scenarios (qfg-7h5d.1.14). Matches test.yaml's
+          # pinning rationale.
+          ref: v2026.06.19.1
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT / fine-grained
@@ -94,9 +95,10 @@ jobs:
         if: env.HAS_REPO_TOKEN == 'true'
         working-directory: sdk-net
         env:
-          # o01-secondary-newer needs cross-leg max-wins (qfg-7h5d.1.14); not implemented. The
-          # script already defaults to this skip, but pin it here so CI intent is explicit.
-          CHAOS_SKIP: o01-secondary-newer,o03-late-primary-heals
+          # The parallel-failover hedge (qfg-7h5d.1.14) implements cross-leg watermark-max via the
+          # reject-older guard, so o01 (cold standby), o03 (heal forward), and o05 (secondary newer)
+          # now pass — no scenarios are skipped. Cleared CHAOS_SKIP so all of o01-o05 + f01-f05 run.
+          CHAOS_SKIP: ""
           DOTNET: dotnet
         run: ./scripts/run-failover-chaos.sh
 

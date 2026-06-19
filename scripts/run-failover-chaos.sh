@@ -18,7 +18,7 @@
 # Env knobs (override on the command line):
 #   TEST_FILTER     dotnet test --filter (default 'Category=FailoverChaos' — both rigs)
 #   CHAOS_SKIP      comma scenario filter, matched against the file base name
-#                   (default 'o01-secondary-newer' — needs cross-leg max-wins, qfg-7h5d.1.14)
+#                   (default empty — the hedge makes o01/o03/o05 pass, qfg-7h5d.1.14)
 #   CHAOS_ONLY      comma scenario filter (allow-list)
 #   CHAOS_POLL_MS   expectation poll interval (default 200)
 #   CHAOS_FIXTURE_SDK_KEY  backend SDK key matching the fixture (default test-backend-key)
@@ -47,7 +47,10 @@ export QUONFIG_CHAOS_SESSION="${QUONFIG_CHAOS_SESSION:-sdk-net-failover-$$-$(dat
 export QUONFIG_CHAOS_OWNER_PID=$$
 
 TEST_FILTER="${TEST_FILTER:-Category=FailoverChaos}"
-export CHAOS_SKIP="${CHAOS_SKIP:-o01-secondary-newer}"
+# The parallel-failover hedge (qfg-7h5d.1.14) makes o01/o03/o05 pass, so nothing is skipped by
+# default. Use ${VAR-default} (no colon) so an explicitly-set empty CHAOS_SKIP="" stays empty and
+# is NOT replaced by a default — clearing the skip from the workflow must actually clear it.
+export CHAOS_SKIP="${CHAOS_SKIP-}"
 export CHAOS_ONLY="${CHAOS_ONLY:-}"
 export CHAOS_POLL_MS="${CHAOS_POLL_MS:-200}"
 FIXTURE_KEY="${CHAOS_FIXTURE_SDK_KEY:-test-backend-key}"

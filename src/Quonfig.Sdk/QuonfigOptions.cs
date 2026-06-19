@@ -92,6 +92,35 @@ public sealed class QuonfigOptions
     /// </summary>
     public TimeSpan ConfigFetchTimeout { get; set; } = TimeSpan.FromSeconds(3);
 
+    /// <summary>
+    /// How long the parallel-failover hedge waits for the primary leg before ALSO firing the
+    /// secondary leg in parallel (it does NOT cancel the primary). A primary that succeeds before
+    /// this elapses wins and the secondary is never contacted (cold standby, zero extra load on a
+    /// healthy system); a primary that errors fast fires the secondary immediately.
+    ///
+    /// <para>Additive and backward-compatible (qfg-7h5d.1.14): the default (~2s) sits below a
+    /// realistic slow-but-alive primary's worst case yet far enough below the per-leg abort that a
+    /// healthy sub-second primary is never hedged. It must be less than <see cref="ConfigFetchHedgeAbort"/>.
+    /// A non-positive value falls back to the default. Bounds only the hedged init/refresh
+    /// config-fetch path — it never touches the long-lived SSE stream. Mirrors sdk-go's
+    /// <c>WithConfigFetchHedgeDelay</c>.</para>
+    /// </summary>
+    public TimeSpan ConfigFetchHedgeDelay { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Per-leg hard-abort deadline on the hedged config-fetch path. It MUST exceed the longest
+    /// healable primary latency so a late-but-newer primary heals forward (rather than aborting), and
+    /// MUST be less than <see cref="InitTimeout"/> so the init-path heal leg is not clipped; the
+    /// client logs a warning at construction if <see cref="InitTimeout"/> &lt;= this value.
+    ///
+    /// <para>Additive and backward-compatible (qfg-7h5d.1.14): the default (~6s) sits between the
+    /// typical heal latency and the default 10s <see cref="InitTimeout"/>. A non-positive value falls
+    /// back to the default. The hedged path uses this in place of <see cref="ConfigFetchTimeout"/>,
+    /// which still governs the sequential <c>FetchAsync</c> path. Mirrors sdk-go's
+    /// <c>WithConfigFetchHedgeAbort</c>.</para>
+    /// </summary>
+    public TimeSpan ConfigFetchHedgeAbort { get; set; } = TimeSpan.FromSeconds(6);
+
     /// <summary>Policy when initial HTTP+SSE load exceeds <see cref="InitTimeout"/>. Defaults to <see cref="OnInitFailure.Throw"/>.</summary>
     public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Throw;
 

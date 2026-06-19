@@ -568,21 +568,31 @@ public sealed class Quonfig : IQuonfig
         {
             var uris = _opts.ApiUrls.Select(u => new Uri(u, UriKind.Absolute));
             // Per-URL config-fetch timeout (qfg-7h5d.1.11): a hung primary aborts after
-            // ConfigFetchTimeout, leaving budget to reach the secondary inside InitTimeout. The
-            // same transport instance backs the fallback poller and in-band refresh, so the
-            // per-URL bound applies uniformly on every config-fetch path.
+            // ConfigFetchTimeout on the SEQUENTIAL FetchAsync path. The init/refresh install path
+            // uses the parallel hedge (qfg-7h5d.1.14): fire the primary first and, only if it is slow
+            // or errors, fire the secondary in parallel — bounded by HedgeDelay/HedgeAbort. The same
+            // transport instance backs the fallback poller and in-band refresh, so every config-fetch
+            // path shares the per-leg ETag slots + the reject-older install guard.
             transport = new HttpTransport(
-                uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler, _opts.ConfigFetchTimeout);
+                uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler,
+                _opts.ConfigFetchTimeout, _opts.ConfigFetchHedgeDelay, _opts.ConfigFetchHedgeAbort);
             _httpTransport = transport;
 
-            var envelope = await transport.FetchAsync(null, initCts.Token).ConfigureAwait(false);
-            if (envelope is null)
+            // The per-leg hedge abort must be strictly below InitTimeout so an init-path heal leg is
+            // not clipped before it can land. Warn (not throw) so a tightened InitTimeout is still
+            // usable; the hedge just may not heal-forward within the initial budget. Mirrors sdk-go's
+            // construction-time WithConfigFetchHedgeAbort warning.
+            if (_opts.InitTimeout <= _opts.ConfigFetchHedgeAbort)
             {
-                throw new QuonfigException("initial config fetch returned 304 with no prior ETag");
+                _logger.LogWarning(
+                    "quonfig: InitTimeout ({InitTimeout}) <= config-fetch hedge abort ({HedgeAbort}); init-path heal-forward may be clipped — raise InitTimeout above the hedge abort",
+                    _opts.InitTimeout, _opts.ConfigFetchHedgeAbort);
             }
-            // Reject-older guard runs on the initial fetch too; a fresh client always accepts the
-            // first snapshot, so this installs and records the resolved leg + held generation.
-            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
+
+            // Drive one hedged fetch+install cycle. Latches readiness on the FIRST successful install;
+            // a late-but-newer leg heals forward after. Throws when every fired leg failed (so the
+            // catch clauses below apply OnInitFailure); a non-empty 304/no-op cycle is a success.
+            await FetchAndInstallAsync(initial: true, initCts.Token).ConfigureAwait(false);
             _initTcs.TrySetResult(true);
             StartSse();
         }
@@ -614,6 +624,88 @@ public sealed class Quonfig : IQuonfig
             HandleInitFailure(
                 new QuonfigException($"Quonfig client initialization failed: {ex.Message}", ex));
         }
+    }
+
+    /// <summary>
+    /// Drives one parallel-failover hedge cycle and installs whatever arrives through the reject-older
+    /// guard. The hedge fires the primary first and, only if it is slow or errors, fires the secondary
+    /// in parallel; results are installed as they arrive so watermark-max falls out (higher generation
+    /// wins, a late older payload never regresses, a late newer payload heals forward). Readiness
+    /// latches on the FIRST successful install (the init <c>_initTcs</c> completes immediately and
+    /// <c>InitAsync</c> can return) while this method keeps draining so a late-but-newer leg heals
+    /// forward before it returns. Mirrors sdk-go's <c>fetchAndInstall</c>.
+    ///
+    /// <para>Concurrent hedge cycles (a manual <see cref="RefreshAsync"/> racing the fallback poller,
+    /// say) are safe and NOT coalesced: each leg uses its own per-URL ETag slot, every install is
+    /// serialized through <see cref="_installLock"/> + the reject-older guard (so an equal-or-older
+    /// payload is a no-op and the install count can't double), and each leg is bounded by the per-leg
+    /// hedge abort. A coalescing gate would make a manual <see cref="RefreshAsync"/> silently no-op
+    /// whenever a background fetch is in flight, violating the refresh contract.</para>
+    ///
+    /// <para>When <paramref name="initial"/> is true and every fired leg failed (nothing installed),
+    /// this throws the last leg's error so <see cref="RunHttpInitAsync"/>'s catch clauses apply
+    /// <see cref="OnInitFailure"/>. An all-304 / no-op cycle returns without throwing.</para>
+    /// </summary>
+    private async Task FetchAndInstallAsync(bool initial, CancellationToken cancellationToken)
+    {
+        var transport = _httpTransport;
+        if (transport is null) return;
+
+        var reader = transport.FetchHedgedAsync(cancellationToken);
+
+        bool installedOnce = false;
+        int fired = 0;
+        int failures = 0;
+        Exception? lastError = null;
+
+        while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            while (reader.TryRead(out var leg))
+            {
+                fired++;
+                if (leg.Error is not null)
+                {
+                    failures++;
+                    lastError = leg.Error;
+                    continue;
+                }
+                if (leg.NotModified || leg.Envelope is null)
+                {
+                    continue; // 304 — nothing changed on this leg.
+                }
+                // Reject-older guard + install are atomic under _installLock against every other
+                // install path (SSE, fallback poller). TryInstallFromNetwork sets the held generation,
+                // install count, and resolved-from leg together (resolvedFrom set atomically with held).
+                bool installed = TryInstallFromNetwork(leg.Envelope, leg.LegIndex);
+                if (installed)
+                {
+                    _supervisor?.RecordSuccessfulRefresh();
+                    if (!installedOnce)
+                    {
+                        installedOnce = true;
+                        if (initial)
+                        {
+                            // Latch readiness on the FIRST successful install; keep draining so a
+                            // late-but-newer leg heals forward before this call returns.
+                            _initTcs.TrySetResult(true);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (installedOnce)
+        {
+            return;
+        }
+
+        // Nothing installed. If every fired leg failed, surface the failure (init path applies
+        // OnInitFailure). Otherwise every leg was a 304 (established client, no change) — a no-op.
+        if (initial && fired > 0 && failures == fired && lastError is not null)
+        {
+            throw lastError;
+        }
+        // initial with an all-304 / empty cycle, or a non-initial refresh: a no-op success.
     }
 
     /// <summary>
@@ -719,13 +811,11 @@ public sealed class Quonfig : IQuonfig
         if (transport is null) return;
         try
         {
-            var envelope = await transport.FetchAsync(transport.LastETag, ct).ConfigureAwait(false);
-            if (envelope is null) return; // 304 — nothing changed.
-            // Reject-older guard: a fallback-poller fetch installs only if it advances the held
-            // generation. Without this, a failover to an older secondary regresses an established
-            // client (qfg-7h5d.1.11).
-            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
-            _supervisor?.RecordSuccessfulRefresh();
+            // Fallback poller hedges too (qfg-7h5d.1.14): fire the primary first, hedge the secondary
+            // only if slow/erroring. Each accepted leg installs only if it advances the held
+            // generation (reject-older), so a failover to an older secondary never regresses an
+            // established client. RecordSuccessfulRefresh fires per accepted install inside the loop.
+            await FetchAndInstallAsync(initial: false, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -748,9 +838,11 @@ public sealed class Quonfig : IQuonfig
         if (transport is null) return;
         try
         {
-            var envelope = await transport.FetchAsync(transport.LastETag, cancellationToken).ConfigureAwait(false);
-            if (envelope is null) return; // 304 — nothing changed.
-            TryInstallFromNetwork(envelope, transport.LastResolvedIndex);
+            // A manual refresh ALWAYS actually fetches — there is no coalescing gate (qfg-7h5d.1.14):
+            // overlapping cycles are safe via per-leg ETag isolation + the serialized reject-older
+            // install guard + per-leg hedge abort. Drives the same hedge + reject-older path as init,
+            // so it exercises the real failover/heal-forward mechanism, not a test-only shortcut.
+            await FetchAndInstallAsync(initial: false, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

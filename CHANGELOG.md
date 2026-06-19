@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-06-19
+
+Backward-compatible minor. Hardens the HTTP config-fetch path for fast, regression-free failover.
+
+- **Parallel-failover hedge on the HTTP config-fetch (qfg-7h5d.1.14).** The init/refresh config fetch is now a parallel hedge: the SDK fires the **primary** URL first and, only if it answers within the hedge delay (~2s), the primary wins and the **secondary is never contacted** (cold standby, zero extra load on a healthy system). If the primary is slow past the hedge delay or errors fast, the SDK *also* fires the secondary **in parallel** (without cancelling the primary). Each arriving leg is installed through the existing reject-older guard, so watermark-max falls out: the higher `Meta.generation` wins, a late older payload never regresses an established client, and a late newer payload heals forward. SSE is untouched and never fails over.
+  - Two new additive options: `QuonfigOptions.ConfigFetchHedgeDelay` (default ~2s — how long to wait for the primary before hedging the secondary) and `QuonfigOptions.ConfigFetchHedgeAbort` (default ~6s — the per-leg hard-abort deadline). The existing `ConfigFetchTimeout` is unchanged and still governs the sequential `FetchAsync` path. A warning is logged at construction if `InitTimeout <= ConfigFetchHedgeAbort`.
+  - **Backward-compatible behavioral notes.** `resolvedFrom` may now return `"primary"` in a fast-both topology where 1.0.0 (sequential) returned `"secondary"` only on a primary failure; an extra post-ready config-update callback may fire when a late-but-newer leg heals forward; and ETags are now tracked **per leg** (each URL has its own slot) so a 304 from one leg can no longer mask the other and there is no cross-leg ETag data race.
 
 - **Failover + canonical-ordering reliability (qfg-7h5d.1.11).** Two additive, backward-compatible hardening changes proven red→green against the shared failover + ordering chaos corpus:
   - **Per-URL config-fetch timeout.** Each failover leg now gets its own deadline so a hung or slow primary aborts fast (~3s default) and the secondary is reached within the overall `InitTimeout`, instead of the primary starving the whole budget. Tunable via the new `QuonfigOptions.ConfigFetchTimeout` option (default 3s); applies to the initial fetch, the fallback poller, and in-band refresh.
