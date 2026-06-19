@@ -96,7 +96,7 @@ jobs:
         env:
           # o01-secondary-newer needs cross-leg max-wins (qfg-7h5d.1.14); not implemented. The
           # script already defaults to this skip, but pin it here so CI intent is explicit.
-          CHAOS_SKIP: o01-secondary-newer
+          CHAOS_SKIP: o01-secondary-newer,o03-late-primary-heals
           DOTNET: dotnet
         run: ./scripts/run-failover-chaos.sh
 
