@@ -50,7 +50,7 @@ jobs:
           # Tracks main: the scenarios-failover/ + scenarios-ordering/ corpus this job drives only
           # exists on main, not yet in a tag. Pin to a tag once the corpus is rev'd into one,
           # matching test.yaml's pinning rationale.
-          ref: main
+          ref: v2026.06.19
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT / fine-grained
