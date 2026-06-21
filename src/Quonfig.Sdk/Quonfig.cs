@@ -922,8 +922,11 @@ public sealed class Quonfig : IQuonfig
             int incoming = envelope.Meta?.Generation ?? 0;
             // Established client: reject anything that doesn't strictly advance the watermark
             // (older = regression, equal = redundant no-op). A fresh client (_networkInstallCount
-            // == 0) always installs, even at generation 0.
-            if (_networkInstallCount > 0 && incoming <= _heldGeneration)
+            // == 0) always installs, even at generation 0. An UNVERSIONED snapshot (incoming <= 0 —
+            // a server that predates the watermark, or one whose rev-count failed) carries no
+            // ordering info, so it is never rejected as "older"; freezing the client on stale
+            // config would be worse (mirrors sdk-node's carve-out).
+            if (_networkInstallCount > 0 && incoming > 0 && incoming <= _heldGeneration)
             {
                 return false;
             }

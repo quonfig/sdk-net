@@ -66,6 +66,27 @@ public sealed class QuonfigRejectOlderTests
     }
 
     [Fact]
+    public async Task EstablishedClient_InstallsUnversionedSnapshot_CarveOut()
+    {
+        using var server = WireMockServer.Start();
+        ServeGeneration(server, 42);
+
+        await using var client = NewClient(server);
+        await client.InitAsync();
+
+        client.HeldGeneration.Should().Be(42, "the initial fetch established generation 42");
+
+        // Server now serves an UNVERSIONED (generation 0) snapshot — a server that predates the
+        // watermark, or one whose rev-count failed. It carries no ordering information, so the
+        // carve-out must install it rather than freeze the established client on 42.
+        ServeGeneration(server, 0);
+        await client.RefreshAsync();
+
+        client.HeldGeneration.Should().Be(0, "gen-0 carve-out: an unversioned snapshot must install, not freeze");
+        client.NetworkInstallCount.Should().Be(2, "the carve-out install advances the count");
+    }
+
+    [Fact]
     public async Task EstablishedClient_HealsForwardToNewerGeneration()
     {
         using var server = WireMockServer.Start();
