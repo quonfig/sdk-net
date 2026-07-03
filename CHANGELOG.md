@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-07-03
 
 Backward-compatible patch (qfg-41nh.8, part of the coordinated 1.1.1 hardening train).
 
