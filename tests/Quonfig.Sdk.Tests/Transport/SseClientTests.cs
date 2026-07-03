@@ -346,6 +346,91 @@ public sealed class SseClientTests
     }
 
     [Fact]
+    public async Task RunAsync_PinsStreamToPrimary_NeverContactsSecondary()
+    {
+        // f05 invariant: the SSE stream is pinned to StreamUrls[0] and never walks the failover
+        // list. A dead primary must be retried forever (with backoff) — the secondary stream
+        // endpoint must receive ZERO connection attempts.
+        using var primary = WireMockServer.Start();
+        using var secondary = WireMockServer.Start();
+        primary
+            .Given(Request.Create().WithPath("/api/v2/sse/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(503));
+        secondary
+            .Given(Request.Create().WithPath("/api/v2/sse/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "text/event-stream")
+                .WithBody("data: " + MinimalEnvelopeJson("v-secondary") + "\n\n"));
+
+        var received = new ConcurrentQueue<ConfigEnvelope>();
+        using var sse = new SseClient(
+            streamUrls: new[] { new Uri(primary.Urls[0]), new Uri(secondary.Urls[0]) },
+            sdkKey: SdkKey,
+            onEnvelope: env => received.Enqueue(env),
+            readTimeout: TimeSpan.FromSeconds(5),
+            initialBackoff: TimeSpan.FromMilliseconds(25),
+            maxBackoff: TimeSpan.FromMilliseconds(100));
+
+        using var cts = new CancellationTokenSource();
+        var runTask = sse.RunAsync(cts.Token);
+
+        // Wait until the primary has been attempted at least 3 times — proof of retry-forever
+        // (not give-up, not walk-away). The window is generous; with a 25-100ms backoff three
+        // attempts land in well under a second.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (primary.LogEntries.Count() < 3 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+        cts.Cancel();
+        try { await runTask; } catch (OperationCanceledException) { }
+
+        primary.LogEntries.Count().Should().BeGreaterThanOrEqualTo(3,
+            "a dead primary stream must be retried forever with backoff");
+        secondary.LogEntries.Should().BeEmpty(
+            "SSE never fails over — the stream is pinned to StreamUrls[0] (f05)");
+        received.Should().BeEmpty("no envelope may arrive from the secondary stream");
+    }
+
+    [Fact]
+    public async Task RunAsync_RecordsPrimaryStreamIndexOnConnect()
+    {
+        // The chaos probe (scenario f05) reads MaxConnectedStreamIndex to assert the stream
+        // never repointed to a failover leg. A healthy primary must record index 0; -1 until
+        // the first 200-OK edge.
+        using var primary = WireMockServer.Start();
+        using var secondary = WireMockServer.Start();
+        primary
+            .Given(Request.Create().WithPath("/api/v2/sse/config").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "text/event-stream")
+                .WithBody(": welcome\n\n"));
+
+        using var sse = new SseClient(
+            streamUrls: new[] { new Uri(primary.Urls[0]), new Uri(secondary.Urls[0]) },
+            sdkKey: SdkKey,
+            onEnvelope: _ => { },
+            readTimeout: TimeSpan.FromSeconds(5),
+            initialBackoff: TimeSpan.FromSeconds(10));
+
+        sse.MaxConnectedStreamIndex.Should().Be(-1, "no stream has connected yet");
+
+        using var cts = new CancellationTokenSource();
+        var runTask = sse.RunAsync(cts.Token);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (sse.MaxConnectedStreamIndex < 0 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+        cts.Cancel();
+        try { await runTask; } catch (OperationCanceledException) { }
+
+        sse.MaxConnectedStreamIndex.Should().Be(0,
+            "the stream is pinned to the primary, so the connected index is always 0");
+    }
+
+    [Fact]
     public void Constructor_RejectsEmptyStreamUrls()
     {
         Action act = () =>

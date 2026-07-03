@@ -33,6 +33,9 @@ public sealed class QuonfigOptions
 
     /// <summary>
     /// Ordered list of api-delivery SSE base URLs. Defaults to the production stream cluster.
+    /// Only <c>StreamUrls[0]</c> is ever streamed from: the SSE stream is pinned to the primary
+    /// and never fails over (retry-forever with backoff); failover is an HTTP-poll-only property
+    /// of <see cref="ApiUrls"/>.
     /// </summary>
     public IReadOnlyList<string> StreamUrls { get; set; } = new[]
     {

@@ -65,9 +65,20 @@ public sealed class SseClient : IDisposable
     private readonly HttpClient _httpClient;
     private readonly bool _ownsClient;
     private readonly Random _rng = new();
+    private int _maxConnectedStreamIndex = -1;
 
     /// <summary>Ordered list of base URLs (primary first).</summary>
     public IReadOnlyList<Uri> StreamUrls => _streamUrls;
+
+    /// <summary>
+    /// Highest <see cref="StreamUrls"/> index a 200-OK stream has EVER been established with;
+    /// <c>-1</c> until the first connect. Because the stream is pinned to <c>StreamUrls[0]</c>
+    /// (SSE never fails over — the f05 invariant), this latches at <c>0</c>; a value &gt; 0 would
+    /// mean the stream repointed to a failover leg. Derived from the real connection machinery
+    /// (recorded on each 200-OK edge), not assumed, so the chaos suite's f05 probe catches a
+    /// regression that reintroduces stream-leg walking.
+    /// </summary>
+    internal int MaxConnectedStreamIndex => Volatile.Read(ref _maxConnectedStreamIndex);
 
     /// <summary>
     /// Layer 1 read watchdog. <see cref="TimeSpan.Zero"/> disables the watchdog
@@ -79,7 +90,10 @@ public sealed class SseClient : IDisposable
     /// Initializes a new SSE client. Lifecycle is driven by <see cref="RunAsync"/>; the
     /// caller passes the cancellation token used to stop the loop.
     /// </summary>
-    /// <param name="streamUrls">Ordered list of base URLs (primary first). Must be non-empty.</param>
+    /// <param name="streamUrls">Ordered list of base URLs (primary first). Must be non-empty.
+    /// Only <c>streamUrls[0]</c> is ever streamed from — SSE is pinned to the primary and never
+    /// fails over (see <see cref="RunAsync"/>); the rest of the list is accepted for
+    /// backward compatibility and diagnostics.</param>
     /// <param name="sdkKey">SDK key used as the password in HTTP Basic auth (<c>username=1</c>).</param>
     /// <param name="onEnvelope">Delegate invoked with each decoded <see cref="ConfigEnvelope"/>.
     /// Atomic-swap into the resolver is the caller's responsibility.</param>
@@ -181,31 +195,31 @@ public sealed class SseClient : IDisposable
     /// Runs the connect/parse/reconnect loop until <paramref name="cancellationToken"/> fires.
     /// Idempotent in the sense that the task itself is single-use — start one per client
     /// instance. Returns when the token is cancelled; throws nothing on cancellation.
+    ///
+    /// <para>The stream is PINNED to <c>StreamUrls[0]</c> and never walks the rest of the list —
+    /// SSE does not fail over (the f05 invariant, sdk-go semantics). Failover is an HTTP-poll-only
+    /// property: repointing the long-lived stream at a secondary would silently bind config
+    /// freshness to the mirror and park SSE herds on infrastructure sized for poll traffic. A
+    /// dead primary is retried forever with exponential backoff (reset after any successful
+    /// read); during the outage the <see cref="Supervisor.FallbackPoller"/> covers freshness via
+    /// the hedged HTTP path, which does keep both legs.</para>
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         var delay = _initialBackoff;
         while (!cancellationToken.IsCancellationRequested)
         {
-            bool anyRead = false;
-            for (int i = 0; i < _streamUrls.Count; i++)
+            bool consumed = await ConnectOnceAsync(0, cancellationToken).ConfigureAwait(false);
+            if (cancellationToken.IsCancellationRequested) return;
+            if (consumed)
             {
-                if (cancellationToken.IsCancellationRequested) return;
-                bool consumed = await ConnectOnceAsync(_streamUrls[i], cancellationToken).ConfigureAwait(false);
-                if (consumed)
-                {
-                    anyRead = true;
-                    // Successful read — reset the long-tail backoff and stop walking the
-                    // failover list. We'll loop right back to the primary on reconnect.
-                    delay = _initialBackoff;
-                    break;
-                }
+                // Successful read — reset the long-tail backoff before reconnecting to the
+                // same (primary) stream endpoint.
+                delay = _initialBackoff;
             }
 
-            if (cancellationToken.IsCancellationRequested) return;
-
-            // Jittered sleep then exponential backoff if nothing connected this round.
-            var sleep = anyRead ? _initialBackoff : delay;
+            // Jittered sleep then exponential backoff if the connect produced nothing.
+            var sleep = consumed ? _initialBackoff : delay;
             try
             {
                 await Task.Delay(sleep, cancellationToken).ConfigureAwait(false);
@@ -214,7 +228,7 @@ public sealed class SseClient : IDisposable
             {
                 return;
             }
-            if (!anyRead)
+            if (!consumed)
             {
                 delay = NextBackoff(delay, _maxBackoff, _rng);
             }
@@ -224,9 +238,9 @@ public sealed class SseClient : IDisposable
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Usage", "CA1849:Call async methods when in an async method",
         Justification = "body.Dispose in the finally is fine — body is fully drained or watchdog-disposed by this point.")]
-    private async Task<bool> ConnectOnceAsync(Uri baseUrl, CancellationToken cancellationToken)
+    private async Task<bool> ConnectOnceAsync(int urlIndex, CancellationToken cancellationToken)
     {
-        var target = AppendPath(baseUrl, SsePath);
+        var target = AppendPath(_streamUrls[urlIndex], SsePath);
         using var request = new HttpRequestMessage(HttpMethod.Get, target);
         request.Headers.TryAddWithoutValidation("Authorization", _authHeader);
         request.Headers.TryAddWithoutValidation("X-Quonfig-SDK-Version", _sdkVersionHeader);
@@ -270,6 +284,14 @@ public sealed class SseClient : IDisposable
 #else
             var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 #endif
+            // Record which stream leg this 200-OK connection was established with BEFORE the
+            // connect edge fires, so observers (the f05 chaos probe via Quonfig) read a
+            // consistent value from inside the onConnect callback.
+            if (urlIndex > Volatile.Read(ref _maxConnectedStreamIndex))
+            {
+                Volatile.Write(ref _maxConnectedStreamIndex, urlIndex);
+            }
+
             // Fire onConnect on the 200-OK edge BEFORE we start reading bytes — the surrounding
             // Quonfig uses this to flip the FallbackPoller back to "connected". Paired with the
             // onDisconnect call in the finally so consumers always see a clean connect→disconnect
