@@ -68,7 +68,7 @@ public sealed class QuonfigOperatorLoggingTests
         await client.InitAsync();
 
         var startupLines = recorder.Entries
-            .Where(e => e.Level == MelLogLevel.Information && e.Message.Contains("polling configuration", StringComparison.Ordinal))
+            .Where(e => e.Level == MelLogLevel.Information && ContainsIgnoreCase(e.Message, "polling configuration"))
             .ToList();
         startupLines.Should().NotBeEmpty(
             "startup must announce the chosen polling mode so deployers can confirm the Layer 1/Layer 2 semantics");
@@ -103,14 +103,14 @@ public sealed class QuonfigOperatorLoggingTests
         // 1) Engage: SSE never connects, threshold (250ms) elapses, Layer 2 engages — WARNING.
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         while (!recorder.Entries.Any(e => e.Level == MelLogLevel.Warning
-                   && e.Message.Contains("fallback poller engaged", StringComparison.OrdinalIgnoreCase))
+                   && ContainsIgnoreCase(e.Message, "fallback poller engaged"))
                && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
         }
         recorder.Entries.Should().Contain(
             e => e.Level == MelLogLevel.Warning
-                && e.Message.Contains("fallback poller engaged", StringComparison.OrdinalIgnoreCase),
+                && ContainsIgnoreCase(e.Message, "fallback poller engaged"),
             "Layer 2 engaging IS the outage signal — it must be a Warning an operator can alert on");
 
         // 2) Disengage: revive the SSE endpoint; the stream reconnects (staying up this time)
@@ -119,14 +119,14 @@ public sealed class QuonfigOperatorLoggingTests
 
         deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (!recorder.Entries.Any(e => e.Level == MelLogLevel.Information
-                   && e.Message.Contains("fallback poller disengaged", StringComparison.OrdinalIgnoreCase))
+                   && ContainsIgnoreCase(e.Message, "fallback poller disengaged"))
                && DateTime.UtcNow < deadline)
         {
             await Task.Delay(50);
         }
         recorder.Entries.Should().Contain(
             e => e.Level == MelLogLevel.Information
-                && e.Message.Contains("fallback poller disengaged", StringComparison.OrdinalIgnoreCase),
+                && ContainsIgnoreCase(e.Message, "fallback poller disengaged"),
             "recovery must be logged so the engage warning has a visible end");
     }
 
@@ -173,7 +173,11 @@ public sealed class QuonfigOperatorLoggingTests
             finally
             {
                 l.Stop();
+#if NET8_0_OR_GREATER
+                // TcpListener implements IDisposable only on modern TFMs; Stop() releases the
+                // socket on net48.
                 l.Dispose();
+#endif
             }
         }
 
@@ -237,6 +241,14 @@ public sealed class QuonfigOperatorLoggingTests
             _cts.Dispose();
         }
     }
+
+    /// <summary>Case-insensitive Contains that also compiles on net48 (no Contains(string, StringComparison) pre-netcoreapp).</summary>
+    private static bool ContainsIgnoreCase(string haystack, string needle) =>
+#if NET8_0_OR_GREATER
+        haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+#else
+        haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
+#endif
 
     /// <summary>Capture-only ILogger; records every Log call for assertions.</summary>
     private sealed class RecordingLogger : ILogger
