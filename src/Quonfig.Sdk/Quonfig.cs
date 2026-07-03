@@ -553,6 +553,30 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
+    /// <summary>
+    /// One-shot startup log announcing the chosen Layer 1 (SSE) and Layer 2 (fallback poll)
+    /// configuration. Parity with sdk-go's <c>logPollingMode</c> / sdk-java's
+    /// <c>logPollingMode</c>: deployers grep for this line to confirm the background-refresh
+    /// semantics their options produced. Note that in sdk-net the fallback poller is started by
+    /// the SSE worker wiring, so without stream URLs there is NO background refresh at all —
+    /// the mode label reflects that honestly.
+    /// </summary>
+    private void LogStartupMode()
+    {
+        bool sseConfigured = !string.IsNullOrEmpty(_opts.SdkKey) && _opts.StreamUrls.Count > 0;
+        bool fallbackConfigured = _opts.FallbackPollEnabled && _opts.FallbackPollInterval > TimeSpan.Zero;
+        string mode = sseConfigured
+            ? (fallbackConfigured ? "sse-with-fallback-poll" : "sse-only")
+            : "no-background-refresh";
+        _logger.LogInformation(
+            "quonfig: polling configuration mode={Mode} sse_enabled={SseEnabled} fallback_poll_enabled={FallbackPollEnabled} fallback_poll_interval={FallbackPollInterval} fallback_poll_threshold={FallbackPollThreshold}",
+            mode,
+            sseConfigured,
+            fallbackConfigured,
+            _opts.FallbackPollInterval,
+            _opts.FallbackPollThreshold);
+    }
+
     private async Task RunHttpInitAsync()
     {
         HttpTransport? transport = null;
@@ -564,6 +588,7 @@ public sealed class Quonfig : IQuonfig
         // QuonfigException wrap). Surface either as QuonfigInitTimeoutException so the
         // cross-SDK initialization_timeout contract holds. (qfg-zp7i.15-followup)
         using var initCts = new CancellationTokenSource(_opts.InitTimeout);
+        LogStartupMode();
         try
         {
             var uris = _opts.ApiUrls.Select(u => new Uri(u, UriKind.Absolute));
@@ -779,8 +804,22 @@ public sealed class Quonfig : IQuonfig
                 fetch: ct => DoFallbackFetchAsync(ct),
                 interval: _opts.FallbackPollInterval,
                 threshold: _opts.FallbackPollThreshold,
-                onEngage: () => UpdateConnectionState(Sdk.ConnectionState.FallingBack),
-                onDisengage: () => UpdateConnectionState(Sdk.ConnectionState.Connected),
+                onEngage: () =>
+                {
+                    // Layer 2 engaging IS the outage signal: SSE has been down past the
+                    // threshold and freshness is now on the poll cadence. Warning level so a
+                    // customer with any wired ILogger can alert on it (sdk-go parity).
+                    _logger.LogWarning(
+                        "quonfig: Layer 2 fallback poller engaged (SSE disconnected past threshold) interval={FallbackPollInterval} threshold={FallbackPollThreshold}",
+                        _opts.FallbackPollInterval,
+                        _opts.FallbackPollThreshold);
+                    UpdateConnectionState(Sdk.ConnectionState.FallingBack);
+                },
+                onDisengage: () =>
+                {
+                    _logger.LogInformation("quonfig: Layer 2 fallback poller disengaged (SSE recovered)");
+                    UpdateConnectionState(Sdk.ConnectionState.Connected);
+                },
                 logger: _logger);
             _fallbackPoller = fp;
         }
