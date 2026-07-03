@@ -669,6 +669,14 @@ public sealed class Quonfig : IQuonfig
                     lastError = leg.Error;
                     continue;
                 }
+                // Any ANSWERED leg — 200-with-install, 304, or a guard-rejected older/same-
+                // generation payload — is a successful poll of the delivery tier: the server
+                // responded; there may simply have been nothing newer to install. Stamp
+                // LastSuccessfulRefresh per answered leg so freshness reports "config is
+                // reachable" (sdk-go post-qfg-41nh.11 semantics). The SSE path is stricter: a
+                // PUSHED envelope that fails the reject-older guard does NOT stamp (see
+                // OnSseEnvelope) — counting stale replays would report a frozen client as fresh.
+                _supervisor?.RecordSuccessfulRefresh();
                 if (leg.NotModified || leg.Envelope is null)
                 {
                     continue; // 304 — nothing changed on this leg.
@@ -679,7 +687,6 @@ public sealed class Quonfig : IQuonfig
                 bool installed = TryInstallFromNetwork(leg.Envelope, leg.LegIndex);
                 if (installed)
                 {
-                    _supervisor?.RecordSuccessfulRefresh();
                     if (!installedOnce)
                     {
                         installedOnce = true;
@@ -814,7 +821,8 @@ public sealed class Quonfig : IQuonfig
             // Fallback poller hedges too (qfg-7h5d.1.14): fire the primary first, hedge the secondary
             // only if slow/erroring. Each accepted leg installs only if it advances the held
             // generation (reject-older), so a failover to an older secondary never regresses an
-            // established client. RecordSuccessfulRefresh fires per accepted install inside the loop.
+            // established client. RecordSuccessfulRefresh fires per ANSWERED leg inside the loop
+            // (installed or not — a 304/same-gen answer is still a successful poll).
             await FetchAndInstallAsync(initial: false, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -885,8 +893,19 @@ public sealed class Quonfig : IQuonfig
             // it advances the held generation (qfg-7h5d.1.11). The SSE leg is its own host (it does
             // not fail over), so the resolved index for an SSE install is left unchanged — it is not
             // an HTTP failover leg.
-            TryInstallFromNetwork(envelope, sourceIndex: -1);
-            _supervisor?.RecordSuccessfulRefresh();
+            //
+            // Stamp freshness ONLY on an accepted install (sdk-java parity, Quonfig.java:648-651).
+            // A guard-REJECTED SSE envelope is a stale replay; stamping it would advance
+            // LastSuccessfulRefresh while the client is effectively frozen on old config
+            // (qfg-41nh.8). This is deliberately stricter than the HTTP poll path in
+            // FetchAndInstallAsync, where an answered request with nothing newer IS a
+            // successful refresh — there the CLIENT asked and the server answered; here the
+            // server pushed something the guard had to discard.
+            bool installed = TryInstallFromNetwork(envelope, sourceIndex: -1);
+            if (installed)
+            {
+                _supervisor?.RecordSuccessfulRefresh();
+            }
             // Receiving an envelope means the SSE stream is live; update connection state and
             // tell the fallback poller it can stand down.
             _fallbackPoller?.SetSseConnected(true);
