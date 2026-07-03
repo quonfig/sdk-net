@@ -152,10 +152,17 @@ public sealed class ChaosTests
             StreamUrls = new[] { sseBase },
             // Datadir mode is N/A here — we want the HTTP+SSE path.
             InitTimeout = TimeSpan.FromSeconds(15),
-            // Default 90s read watchdog matches scenario 02's within_ms=95000 + the SDK contract.
+            // 5s Layer 1 read watchdog, mirroring sdk-go's chaos rig
+            // (withTestSSEReadTimeout(5s), chaos_test.go). The production 90s default loses
+            // scenario 02's timing race: stall injected at 5s + 90s watchdog = the Disconnected
+            // edge lands at ~95s, exactly on exp[1]'s within_ms=95000 deadline (observed red on
+            // the first CI run). The fixture api-delivery heartbeats every 1s
+            // (SSE_HEARTBEAT_INTERVAL=1s in run-chaos.sh), so 5s never false-fires in the
+            // healthy scenarios (01, 03, 11).
+            SseReadTimeout = TimeSpan.FromSeconds(5),
             Logger = logger,
-            // Speed up Layer 2 engage detection for tests where the YAML asserts within ~135s.
-            // (Cross-SDK default is 120s; we honor it.)
+            // Layer 2 engage delay stays at the cross-SDK default (120s) — scenario 05's
+            // within_ms=135000 accommodates it.
         };
 
         // Scenario 10 — user callback throws. sdk-net has no OnConfigUpdate callback; the closest
