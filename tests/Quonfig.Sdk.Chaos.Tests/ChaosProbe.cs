@@ -41,6 +41,7 @@ internal sealed class ChaosProbe
     };
 
     private readonly object _lock = new();
+    private Sdk.Quonfig? _client;
     private State _state = State.Initializing;
     private DateTime? _lastRefreshUtc;
     private long _restartLayer1;
@@ -49,19 +50,63 @@ internal sealed class ChaosProbe
     private int _processCrashed; // 0 == still alive
     private readonly List<LogLine> _logs = new();
 
+    /// <summary>
+    /// Wires the probe to a live client so <see cref="ConnectionState()"/>,
+    /// <see cref="FallbackPollerActive"/>, and <see cref="LastSuccessfulRefreshUtc"/> read the
+    /// SDK's real accessors instead of replaying event edges. Mirrors sdk-go's probe
+    /// (qfg-47c2.20): the client-read path is what lets scenario 05 observe the honest
+    /// <c>LastSuccessfulRefresh</c> stamping semantics (qfg-41nh.8 — stamp per answered leg
+    /// including 304/same-gen; no stamp on guard-rejected installs). Event-derived fields remain
+    /// the fallback when client construction failed.
+    /// </summary>
+    public void SetClient(Sdk.Quonfig client)
+    {
+        lock (_lock) { _client = client; }
+    }
+
+    private Sdk.Quonfig? ClientRef()
+    {
+        lock (_lock) { return _client; }
+    }
+
     /// <summary>Current state as a snake_case string the YAML grammar uses.</summary>
     public string ConnectionState()
     {
+        var c = ClientRef();
+        if (c is not null)
+        {
+            // Same vocabulary mapping as OnConnectionState below: sdk-net's Disconnected is the
+            // Layer 1 gap-between-attempts, which the chaos grammar calls "reconnecting".
+            return c.ConnectionState switch
+            {
+                Sdk.ConnectionState.Connected => Text(State.Connected),
+                Sdk.ConnectionState.FallingBack => Text(State.FallingBack),
+                Sdk.ConnectionState.Disconnected => Text(State.Reconnecting),
+                _ => Text(State.Initializing),
+            };
+        }
         lock (_lock) { return Text(_state); }
     }
 
     public bool FallbackPollerActive()
     {
+        var c = ClientRef();
+        if (c is not null)
+        {
+            // sdk-net has no dedicated poller accessor; FallingBack is the supervisor's "Layer 2
+            // engaged" state, so it is the poller-active signal (see ConnectionState.cs docs).
+            return c.ConnectionState == Sdk.ConnectionState.FallingBack;
+        }
         lock (_lock) { return _fallbackActive; }
     }
 
     public DateTime? LastSuccessfulRefreshUtc()
     {
+        var c = ClientRef();
+        if (c is not null)
+        {
+            return c.LastSuccessfulRefresh?.UtcDateTime;
+        }
         lock (_lock) { return _lastRefreshUtc; }
     }
 

@@ -169,6 +169,12 @@ public sealed class ChaosTests
         try
         {
             client = new Sdk.Quonfig(opts);
+            // Client-read probing (mirrors sdk-go qfg-47c2.20): connectionState /
+            // fallbackPollerActive / lastSuccessfulRefresh come off the live client, so
+            // scenario 05's freshness assertion observes the SDK's real stamping semantics
+            // (qfg-41nh.8) rather than a probe-side simulation. The state handler below still
+            // feeds the event-derived fallback fields and the Layer 1 restart counter.
+            probe.SetClient(client);
 
             stateHandler = state =>
             {
