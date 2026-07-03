@@ -972,6 +972,16 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
+    /// <summary>
+    /// Test/diagnostic: whether the live SSE stream EVER established a connection on a
+    /// non-primary stream leg. Always <c>false</c> by design — <see cref="SseClient"/> pins the
+    /// stream to <c>StreamUrls[0]</c> and never walks the failover list (the f05 invariant;
+    /// failover is an HTTP-poll-only property). Derived from the transport's real connection
+    /// bookkeeping (<see cref="SseClient.MaxConnectedStreamIndex"/>), not assumed, so the chaos
+    /// suite's f05 assertion catches a regression that reintroduces stream-leg walking.
+    /// </summary>
+    internal bool SseFailedOverToSecondary => (_sseClient?.MaxConnectedStreamIndex ?? -1) > 0;
+
     private void InstallEnvelope(ConfigEnvelope envelope)
     {
         // Environment resolution (cross-SDK contract, qfg-pinh):

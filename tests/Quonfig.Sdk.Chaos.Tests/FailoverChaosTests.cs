@@ -162,10 +162,13 @@ public sealed class FailoverChaosTests
         {
             SdkKey = env.SdkKey,
             ApiUrls = new[] { httpBase, secondaryBase },
-            // SSE has a single endpoint (the primary stream). It is NOT given the secondary — the
-            // SDK does not fail SSE over (an explicit design choice asserted by f05). When the
-            // scenario disables SSE we leave StreamUrls empty so only the HTTP path runs.
-            StreamUrls = sseEnabled ? new[] { sseBase } : Array.Empty<string>(),
+            // BOTH stream legs are configured (mirroring the production default StreamUrls shape),
+            // but the SDK pins the stream to StreamUrls[0] and never fails SSE over — an explicit
+            // design choice genuinely asserted by f05: if a regression reintroduces stream-leg
+            // walking, the client connects the secondary stream during the f05 outage and the
+            // probe fails the run. When the scenario disables SSE we leave StreamUrls empty so
+            // only the HTTP path runs.
+            StreamUrls = sseEnabled ? new[] { sseBase, secondaryBase } : Array.Empty<string>(),
             // Per-URL config-fetch timeout: failover needs a tight bound (~2.5s) so a hung/slow
             // primary sheds well inside the 4s failover budget. Ordering needs a bound ABOVE the
             // ~3s primary-latency toxic so a latent-but-healthy primary still answers and the newer
@@ -216,7 +219,7 @@ public sealed class FailoverChaosTests
         }
 
         var client = new Quonfig(opts);
-        var probe = new FailoverProbe(client, sseConfiguredUrls: opts.StreamUrls.Count);
+        var probe = new FailoverProbe(client);
         var evaluator = new FailoverEvaluator(probe);
 
         var bgCts = new CancellationTokenSource();
@@ -577,12 +580,10 @@ public sealed class FailoverChaosTests
     private sealed class FailoverProbe
     {
         private readonly Quonfig _client;
-        private readonly int _sseConfiguredUrls;
 
-        public FailoverProbe(Quonfig client, int sseConfiguredUrls)
+        public FailoverProbe(Quonfig client)
         {
             _client = client;
-            _sseConfiguredUrls = sseConfiguredUrls;
         }
 
         public bool Ready() => _client.LastSuccessfulRefresh is not null;
@@ -593,10 +594,11 @@ public sealed class FailoverChaosTests
 
         public string ResolvedFrom() => _client.ResolvedFrom;
 
-        // sdk-net is configured with a single SSE endpoint (the primary stream) and the SDK does not
-        // repoint SSE to a secondary — so a secondary SSE failover is structurally impossible. f05
-        // asserts exactly this design choice.
-        public bool SseFailedOverToSecondary() => false && _sseConfiguredUrls > 1;
+        // Reads the client's real SSE-leg bookkeeping (latched on every 200-OK stream edge). The
+        // SDK pins the stream to StreamUrls[0] and never repoints it to the secondary — f05 hands
+        // the client BOTH stream legs and asserts the secondary one is never connected, so a
+        // regression that reintroduces stream-leg walking turns this probe true and fails the run.
+        public bool SseFailedOverToSecondary() => _client.SseFailedOverToSecondary;
     }
 
     /// <summary>
