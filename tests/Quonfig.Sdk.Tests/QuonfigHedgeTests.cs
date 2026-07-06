@@ -135,7 +135,10 @@ public sealed class QuonfigHedgeTests
     [Fact]
     public async Task SecondaryNewer_WinsOverSlowOlderPrimary()
     {
-        using var primary = Upstream(generation: 41, delay: TimeSpan.FromMilliseconds(2500));
+        // 4s primary delay (well above the ~2s hedge delay) so the fast secondary deterministically
+        // wins the first install even on a slow/contended CI runner where the hedge-delay timer can
+        // fire late — a 2.5s delay left only a ~0.5s margin and flaked resolvedFromPrimary on net48.
+        using var primary = Upstream(generation: 41, delay: TimeSpan.FromMilliseconds(4000));
         using var secondary = Upstream(generation: 42, delay: TimeSpan.Zero);
 
         await using var client = NewHedgeClient(primary, secondary);
@@ -193,7 +196,10 @@ public sealed class QuonfigHedgeTests
     [Fact]
     public async Task RecordsFailoverSignals_HedgeFired_ResolvedFromSecondary_GuardRejected()
     {
-        using var primary = Upstream(generation: 41, delay: TimeSpan.FromMilliseconds(2500));
+        // 4s primary delay (well above the ~2s hedge delay) so the fast secondary deterministically
+        // wins the first install even on a slow/contended CI runner where the hedge-delay timer can
+        // fire late — a 2.5s delay left only a ~0.5s margin and flaked resolvedFromPrimary on net48.
+        using var primary = Upstream(generation: 41, delay: TimeSpan.FromMilliseconds(4000));
         using var secondary = Upstream(generation: 42, delay: TimeSpan.Zero);
 
         await using var client = NewHedgeClient(primary, secondary);
