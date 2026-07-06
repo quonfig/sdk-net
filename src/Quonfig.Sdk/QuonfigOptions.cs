@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using Microsoft.Extensions.Logging;
+using Quonfig.Sdk.Telemetry;
 using Quonfig.Sdk.Wire;
 
 namespace Quonfig.Sdk;
@@ -196,6 +197,25 @@ public sealed class QuonfigOptions
 
     /// <summary>Granularity of context telemetry uploads. Defaults to <see cref="Sdk.ContextUploadMode.ShapesOnly"/>.</summary>
     public ContextUploadMode ContextUploadMode { get; set; } = ContextUploadMode.ShapesOnly;
+
+    /// <summary>
+    /// Optional <see cref="ITelemetrySender"/> for tests / DI. When set, the client uses it instead
+    /// of the built-in <c>HttpTelemetrySender</c> (which posts to <see cref="TelemetryUrl"/>). Mirrors
+    /// sdk-java's <c>telemetrySender</c> option. When null (the default) and an <see cref="SdkKey"/> is
+    /// present, the built-in HTTP sender is used; telemetry is still gated on the eval/context opt-outs
+    /// (a full opt-out — <see cref="CollectEvaluationSummaries"/> false AND
+    /// <see cref="ContextUploadMode"/> <see cref="Sdk.ContextUploadMode.None"/> — emits nothing).
+    /// </summary>
+    public ITelemetrySender? TelemetrySender { get; set; }
+
+    /// <summary>Delay before the telemetry reporter's first flush. Defaults to 8s (sdk-java parity).</summary>
+    public TimeSpan TelemetryInitialDelay { get; set; } = TimeSpan.FromSeconds(8);
+
+    /// <summary>Base interval between telemetry flushes once running. Defaults to 60s.</summary>
+    public TimeSpan TelemetryFlushInterval { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Max backoff interval the reporter grows to on repeated send failures. Defaults to 600s.</summary>
+    public TimeSpan TelemetryMaxInterval { get; set; } = TimeSpan.FromSeconds(600);
 
     /// <summary>
     /// When set, <see cref="Quonfig.ShouldLog"/> evaluates this single config (with the logger

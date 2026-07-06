@@ -43,6 +43,10 @@ public sealed class QuonfigRejectOlderTests
             // the guard's behavior is observed deterministically.
             StreamUrls = Array.Empty<string>(),
             InitTimeout = TimeSpan.FromSeconds(5),
+            // This test exercises the reject-older guard, not telemetry; opt out so the now-live
+            // reporter (qfg-gxm6) does not post to the default telemetry endpoint.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
         });
 
     [Fact]

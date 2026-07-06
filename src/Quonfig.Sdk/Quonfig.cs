@@ -137,6 +137,23 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     private readonly FailoverCollector? _failover;
 
+    /// <summary>
+    /// Runtime telemetry pipeline (qfg-gxm6). Non-null only when telemetry is enabled AND a sender
+    /// resolves (delivery mode with an SDK key, or an injected <see cref="QuonfigOptions.TelemetrySender"/>).
+    /// The collectors are fed at the evaluation call sites in <see cref="TypedDetailsRaw{T}"/>; the
+    /// reporter periodically drains them (plus <see cref="_failover"/>) and posts to api-telemetry,
+    /// and flushes once more on <see cref="CloseAsync"/>. Mirrors sdk-java's client-owned reporter
+    /// lifecycle. Datadir/datafile clients construct none of this and emit no runtime telemetry.
+    /// </summary>
+    private readonly EvaluationSummaryCollector? _summaries;
+    private readonly ContextShapeCollector? _shapes;
+    private readonly ExampleContextCollector? _examples;
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Reliability", "CA2213:Disposable fields should be disposed",
+        Justification = "TelemetryReporter is flushed and disposed via CloseAsync (DisposeAsync -> CloseAsync).")]
+    private readonly TelemetryReporter? _telemetryReporter;
+
     /// <summary>Constructs a client. <see cref="InitAsync"/> must be awaited before sync getters are reliable.</summary>
     public Quonfig(QuonfigOptions options)
     {
@@ -158,16 +175,38 @@ public sealed class Quonfig : IQuonfig
         _streamUrls = streamUrls;
         _telemetryUrl = telemetryUrl;
 
-        // Failover counters carry no user data and are the operational signal for the
-        // secondary-delivery hardening, so they ride any enabled telemetry stream regardless of the
-        // eval/context sub-opt-outs — but a FULL telemetry opt-out (no eval summaries AND no context
-        // uploads) records nothing. Mirrors sdk-go, where the failover aggregator lives on the
-        // Submitter, which is only constructed when telemetry is enabled. (qfg-41nh.18)
+        ValidateModes(options);
+
+        // Telemetry pipeline (qfg-gxm6, mirrors sdk-java): construct the collectors + reporter when
+        // telemetry is enabled AND a sender resolves. A sender resolves in delivery mode (the built-in
+        // HTTP sender needs an SDK key) or when one is injected via QuonfigOptions.TelemetrySender —
+        // datadir/datafile clients emit no runtime telemetry. Failover counters carry no user data and
+        // ride the same envelope, so they follow the same enable gate: a FULL opt-out (no eval
+        // summaries AND no context uploads) records nothing. Mirrors sdk-go, where the failover
+        // aggregator lives on the Submitter, which is only constructed when telemetry is enabled.
+        // (qfg-41nh.18 + qfg-gxm6)
         bool telemetryEnabled = options.CollectEvaluationSummaries
             || options.ContextUploadMode != ContextUploadMode.None;
-        _failover = telemetryEnabled ? new FailoverCollector() : null;
-
-        ValidateModes(options);
+        var telemetrySender = telemetryEnabled ? ResolveTelemetrySender(options, _telemetryUrl) : null;
+        if (telemetrySender is not null)
+        {
+            _summaries = new EvaluationSummaryCollector(options.CollectEvaluationSummaries);
+            _shapes = new ContextShapeCollector(options.ContextUploadMode);
+            _examples = new ExampleContextCollector(options.ContextUploadMode);
+            _failover = new FailoverCollector();
+            _telemetryReporter = new TelemetryReporter(
+                telemetrySender,
+                Guid.NewGuid().ToString(),
+                _summaries,
+                _shapes,
+                _examples,
+                options.TelemetryInitialDelay,
+                options.TelemetryFlushInterval,
+                options.TelemetryMaxInterval,
+                _logger,
+                _failover);
+            _telemetryReporter.Start();
+        }
 
         _effectiveEnvironment = options.Environment;
         _globalContext = ResolveGlobalContext(options);
@@ -286,6 +325,15 @@ public sealed class Quonfig : IQuonfig
         _sseClient?.Dispose();
         _httpTransport?.Dispose();
         _sseCts?.Dispose();
+
+        // Stop the telemetry reporter last: DisposeAsync attempts one final synchronous flush of any
+        // pending events (eval summaries, context shapes, failover counters) before tearing down its
+        // background loop. (qfg-gxm6)
+        var reporter = _telemetryReporter;
+        if (reporter is not null)
+        {
+            await reporter.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     /// <inheritdoc/>
@@ -471,6 +519,31 @@ public sealed class Quonfig : IQuonfig
             throw new ArgumentException(
                 "QuonfigOptions.ApiUrls must contain at least one URL", nameof(opts));
         }
+    }
+
+    /// <summary>
+    /// Resolves the telemetry sender: an injected <see cref="QuonfigOptions.TelemetrySender"/> wins;
+    /// otherwise, in delivery mode (an <see cref="QuonfigOptions.SdkKey"/> is present) the built-in
+    /// <see cref="HttpTelemetrySender"/> posts to <paramref name="telemetryUrl"/>, reusing any
+    /// injected <see cref="QuonfigOptions.HttpMessageHandler"/>. Returns <c>null</c> when there is no
+    /// SDK key and no injected sender (datadir/datafile mode), so no reporter is built. Mirrors
+    /// sdk-java's <c>resolveTelemetrySender</c>.
+    /// </summary>
+    private static ITelemetrySender? ResolveTelemetrySender(QuonfigOptions opts, string telemetryUrl)
+    {
+        if (opts.TelemetrySender is not null)
+        {
+            return opts.TelemetrySender;
+        }
+        if (string.IsNullOrEmpty(opts.SdkKey))
+        {
+            return null;
+        }
+        return new HttpTelemetrySender(
+            new Uri(telemetryUrl, UriKind.Absolute),
+            opts.SdkKey!,
+            HttpTelemetrySender.DefaultTimeout,
+            opts.HttpMessageHandler);
     }
 
     /// <summary>
@@ -1246,6 +1319,12 @@ public sealed class Quonfig : IQuonfig
 
         var effective = MergeContexts(_globalContext, contexts) ?? new ContextSet();
 
+        // Context telemetry (qfg-gxm6): record the shape / example of the evaluation context on every
+        // resolved-config evaluation, mirroring sdk-java. No-op when telemetry is disabled (collectors
+        // null) or when ContextUploadMode is None (the collectors self-gate on the mode).
+        _shapes?.Push(effective);
+        _examples?.Push(effective);
+
         EvaluationMatch match;
         try
         {
@@ -1295,6 +1374,26 @@ public sealed class Quonfig : IQuonfig
 
         var matchReason = MapMatchReason(match);
         var variant = VariantFor(matchReason, match.RuleIndex, match.WeightedValueIndex);
+
+        // Evaluation-summary telemetry (qfg-gxm6): record one observation per resolved evaluation,
+        // mirroring sdk-java. Confidential / encrypted values are redacted to the cross-SDK
+        // reportable marker so plaintext secrets never reach the wire. The collector self-skips
+        // LOG_LEVEL rows and no-ops when disabled; ConfigType is the raw wire type string
+        // (lowercase, e.g. "config" / "feature_flag" / "log_level"), matching sdk-node/sdk-go.
+        if (_summaries is not null)
+        {
+            string? reportable = Eval.Resolver.ReportableValueFor(match.Value);
+            _summaries.Push(new EvaluationStat(
+                match.ConfigId,
+                match.ConfigKey,
+                TryGetType(cfg) ?? string.Empty,
+                match.RuleIndex,
+                match.WeightedValueIndex,
+                typed,
+                reportable,
+                matchReason));
+        }
+
         return new EvaluationDetails<T>(
             typed,
             matchReason,

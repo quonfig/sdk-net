@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Quonfig.Sdk;
+using Quonfig.Sdk.Telemetry;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -73,7 +74,18 @@ public sealed class QuonfigHedgeTests
             InitTimeout = TimeSpan.FromSeconds(10),
             OnInitFailure = OnInitFailure.ReturnDefaults,
             OnNoDefault = OnNoDefault.Ignore,
+            // Telemetry stays ENABLED (these tests drain client.Failover) but a no-op sender keeps it
+            // off the network, and a far-out initial delay stops the reporter's background loop from
+            // draining the failover collector out from under the test's own Drain(). (qfg-gxm6)
+            TelemetrySender = new NoopSender(),
+            TelemetryInitialDelay = TimeSpan.FromMinutes(5),
         });
+
+    private sealed class NoopSender : ITelemetrySender
+    {
+        public Task SendAsync(IDictionary<string, object?> payload, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
 
     private static async Task PollUntilGenerationAsync(Quonfig client, int want, TimeSpan within)
     {

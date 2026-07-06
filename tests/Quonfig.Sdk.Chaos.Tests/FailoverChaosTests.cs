@@ -179,6 +179,11 @@ public sealed class FailoverChaosTests
             // timestamp, and background work (refresh loop / SSE) keeps trying.
             OnInitFailure = OnInitFailure.ReturnDefaults,
             OnNoDefault = OnNoDefault.Ignore,
+            // The rig observes failover via ResolvedFrom / SseFailedOverToSecondary, not the telemetry
+            // collector; opt out so the now-live reporter (qfg-gxm6) does not post to the default
+            // (production) telemetry endpoint during a chaos run.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
         };
 
         // Pre-stage chaos events that fire at t=0 so the fault is present before the initial fetch

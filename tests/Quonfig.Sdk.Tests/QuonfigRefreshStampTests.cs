@@ -71,6 +71,10 @@ public sealed class QuonfigRefreshStampTests
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = new[] { server.Urls[0] },
             InitTimeout = TimeSpan.FromSeconds(5),
+            // Freshness-stamp behavior, not telemetry; opt out so the now-live reporter (qfg-gxm6)
+            // does not post to the default telemetry endpoint.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
         });
         await client.InitAsync();
         var stampAfterInit = client.LastSuccessfulRefresh;
@@ -106,6 +110,10 @@ public sealed class QuonfigRefreshStampTests
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = new[] { server.Urls[0] },
             InitTimeout = TimeSpan.FromSeconds(5),
+            // Freshness-stamp behavior, not telemetry; opt out so the now-live reporter (qfg-gxm6)
+            // does not post to the default telemetry endpoint.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
         });
         await client.InitAsync();
 

@@ -163,6 +163,11 @@ public sealed class ChaosTests
             Logger = logger,
             // Layer 2 engage delay stays at the cross-SDK default (120s) — scenario 05's
             // within_ms=135000 accommodates it.
+            // The rig observes behavior via connection-state / generation getters, not the telemetry
+            // collector; opt out so the now-live reporter (qfg-gxm6) does not post to the default
+            // (production) telemetry endpoint during a chaos run.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
         };
 
         // Scenario 10 — user callback throws. sdk-net has no OnConfigUpdate callback; the closest

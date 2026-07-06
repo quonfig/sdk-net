@@ -63,6 +63,10 @@ public sealed class QuonfigOperatorLoggingTests
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = new[] { server.Urls[0] },
             InitTimeout = TimeSpan.FromSeconds(5),
+            // Operator logging, not telemetry; opt out so the now-live reporter (qfg-gxm6) does not
+            // post to the default telemetry endpoint.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
             Logger = recorder,
         });
         await client.InitAsync();
@@ -96,6 +100,10 @@ public sealed class QuonfigOperatorLoggingTests
             InitTimeout = TimeSpan.FromSeconds(5),
             FallbackPollThreshold = TimeSpan.FromMilliseconds(250),
             FallbackPollInterval = TimeSpan.FromSeconds(30),
+            // Operator logging, not telemetry; opt out so the now-live reporter (qfg-gxm6) does not
+            // post to the default telemetry endpoint.
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
             Logger = recorder,
         });
         await client.InitAsync();

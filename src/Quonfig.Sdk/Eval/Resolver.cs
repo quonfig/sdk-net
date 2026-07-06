@@ -43,6 +43,61 @@ public sealed class Resolver
         _keyResolver = keyResolver ?? ((_, _) => null);
     }
 
+    /// <summary>Prefix on the redacted telemetry marker for confidential / encrypted values.</summary>
+    internal const string ReportableValuePrefix = "*****";
+
+    /// <summary>
+    /// Returns the redacted telemetry marker for a resolved <see cref="Value"/> that must NOT have its
+    /// plaintext reported — a confidential value or one that was AES-GCM decrypted. The marker is
+    /// <c>*****</c> followed by the first five lowercase hex chars of the MD5 of the plaintext (10
+    /// chars total), matching the cross-SDK contract (sdk-java <c>reportableValueFor</c>, sdk-node
+    /// <c>makeConfidential</c>, sdk-ruby <c>reportable_wrapped_value</c>). Returns <c>null</c> for a
+    /// plain value, so telemetry reports the real value; the MD5 here is a non-cryptographic
+    /// fingerprint used only to distinguish distinct secrets in a summary, never for security.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
+        Justification = "MD5 is a non-security fingerprint used only to redact secrets in telemetry — the cross-SDK reportable-value marker; it never protects data.")]
+    internal static string? ReportableValueFor(Value? val)
+    {
+        if (val is null)
+        {
+            return null;
+        }
+        if (!val.Confidential && string.IsNullOrEmpty(val.DecryptWith))
+        {
+            return null;
+        }
+        string raw = StringOf(val.Payload);
+        byte[] rawBytes = System.Text.Encoding.UTF8.GetBytes(raw);
+#if NET8_0_OR_GREATER
+        byte[] sum = System.Security.Cryptography.MD5.HashData(rawBytes);
+#else
+        byte[] sum;
+        using (var md5 = System.Security.Cryptography.MD5.Create())
+        {
+            sum = md5.ComputeHash(rawBytes);
+        }
+#endif
+        var hex = new System.Text.StringBuilder(sum.Length * 2);
+        foreach (var b in sum)
+        {
+            hex.Append(b.ToString("x2", CultureInfo.InvariantCulture));
+        }
+        if (hex.Length < 5)
+        {
+            return null;
+        }
+        return ReportableValuePrefix + hex.ToString(0, 5);
+    }
+
+    private static string StringOf(object? value) => value switch
+    {
+        null => "",
+        string s => s,
+        _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? "",
+    };
+
     /// <summary>
     /// Resolves <paramref name="candidate"/> to its final form. The arguments mirror sdk-java's
     /// <c>resolve(Value, ConfigRow, String envId, ContextSet)</c>, with the config row exploded
