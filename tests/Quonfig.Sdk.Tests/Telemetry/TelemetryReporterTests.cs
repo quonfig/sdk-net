@@ -158,4 +158,59 @@ public sealed class TelemetryReporterTests
 
         sender.Sent.Should().HaveCount(1);
     }
+
+    [Fact]
+    public async Task flush_emits_failover_event_with_exact_camelcase_fields()
+    {
+        var sender = new CapturingSender();
+        var summaries = new EvaluationSummaryCollector(enabled: true);
+        var shapes = new ContextShapeCollector(ContextUploadMode.ShapesOnly);
+        var examples = new ExampleContextCollector(ContextUploadMode.PeriodicExample);
+        var failover = new FailoverCollector();
+        await using var reporter = new TelemetryReporter(
+            sender, "instance-hash", summaries, shapes, examples,
+            initialDelay: TimeSpan.Zero, baseInterval: TimeSpan.FromSeconds(30),
+            maxInterval: TimeSpan.FromMinutes(10), failover: failover);
+
+        failover.RecordHedgeFired();
+        failover.RecordGuardRejected();
+        failover.RecordResolvedFrom(0); // primary
+        failover.RecordResolvedFrom(1); // secondary
+
+        await reporter.FlushAsync(CancellationToken.None);
+
+        sender.Sent.Should().HaveCount(1);
+        // The failover event must ride the same envelope as the other collectors, with the exact
+        // camelCase field names api-telemetry's Zod schema + ClickHouse MV parse (qfg-41nh.18).
+        string json = System.Text.Json.JsonSerializer.Serialize(sender.Sent[0]);
+        json.Should().Contain("\"failover\":");
+        json.Should().Contain("\"hedgeFired\":1");
+        json.Should().Contain("\"guardRejected\":1");
+        json.Should().Contain("\"resolvedFromPrimary\":1");
+        json.Should().Contain("\"resolvedFromSecondary\":1");
+        json.Should().Contain("\"resolvedFromLkg\":0");
+    }
+
+    [Fact]
+    public async Task flush_with_no_failover_activity_emits_no_failover_event()
+    {
+        var sender = new CapturingSender();
+        var summaries = new EvaluationSummaryCollector(enabled: true);
+        var shapes = new ContextShapeCollector(ContextUploadMode.ShapesOnly);
+        var examples = new ExampleContextCollector(ContextUploadMode.PeriodicExample);
+        var failover = new FailoverCollector();
+        await using var reporter = new TelemetryReporter(
+            sender, "instance-hash", summaries, shapes, examples,
+            initialDelay: TimeSpan.Zero, baseInterval: TimeSpan.FromSeconds(30),
+            maxInterval: TimeSpan.FromMinutes(10), failover: failover);
+
+        // Only an eval summary is pending; a healthy client records no failover activity.
+        summaries.Push(OneStat());
+
+        await reporter.FlushAsync(CancellationToken.None);
+
+        sender.Sent.Should().HaveCount(1);
+        string json = System.Text.Json.JsonSerializer.Serialize(sender.Sent[0]);
+        json.Should().NotContain("failover", "a healthy client must emit no failover event");
+    }
 }

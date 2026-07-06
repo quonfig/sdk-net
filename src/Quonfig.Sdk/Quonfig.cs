@@ -12,6 +12,7 @@ using Quonfig.Sdk.Datadir;
 using Quonfig.Sdk.Eval;
 using Quonfig.Sdk.Exceptions;
 using Quonfig.Sdk.Supervisor;
+using Quonfig.Sdk.Telemetry;
 using Quonfig.Sdk.Transport;
 using Quonfig.Sdk.Wire;
 using EvalValueType = Quonfig.Sdk.Eval.ValueType;
@@ -118,6 +119,15 @@ public sealed class Quonfig : IQuonfig
     /// <summary><see cref="HttpTransport.LastResolvedIndex"/> captured at the last accepted network install. <c>-1</c> until then.</summary>
     private int _resolvedFromIndex = -1;
 
+    /// <summary>
+    /// Accumulates failover-behavior counters (hedge-fired / guard-rejected / resolved-from) for the
+    /// telemetry wire. Non-null only when telemetry is enabled (see the constructor); the failover
+    /// call sites use <c>_failover?.Record*()</c> so a full telemetry opt-out records nothing. Rides
+    /// the same envelope as the eval/context collectors via <see cref="TelemetryReporter"/>
+    /// (qfg-41nh.18).
+    /// </summary>
+    private readonly FailoverCollector? _failover;
+
     /// <summary>Constructs a client. <see cref="InitAsync"/> must be awaited before sync getters are reliable.</summary>
     public Quonfig(QuonfigOptions options)
     {
@@ -128,6 +138,15 @@ public sealed class Quonfig : IQuonfig
 #endif
         _opts = options;
         _logger = options.Logger ?? NullLogger.Instance;
+
+        // Failover counters carry no user data and are the operational signal for the
+        // secondary-delivery hardening, so they ride any enabled telemetry stream regardless of the
+        // eval/context sub-opt-outs — but a FULL telemetry opt-out (no eval summaries AND no context
+        // uploads) records nothing. Mirrors sdk-go, where the failover aggregator lives on the
+        // Submitter, which is only constructed when telemetry is enabled. (qfg-41nh.18)
+        bool telemetryEnabled = options.CollectEvaluationSummaries
+            || options.ContextUploadMode != ContextUploadMode.None;
+        _failover = telemetryEnabled ? new FailoverCollector() : null;
 
         ValidateModes(options);
 
@@ -712,6 +731,9 @@ public sealed class Quonfig : IQuonfig
                 bool installed = TryInstallFromNetwork(leg.Envelope, leg.LegIndex);
                 if (installed)
                 {
+                    // Failover observability: record which leg (primary index 0 / secondary index
+                    // > 0) served the config now held (qfg-41nh.18).
+                    _failover?.RecordResolvedFrom(leg.LegIndex);
                     if (!installedOnce)
                     {
                         installedOnce = true;
@@ -723,7 +745,22 @@ public sealed class Quonfig : IQuonfig
                         }
                     }
                 }
+                else
+                {
+                    // A 200 dropped by the reject-older guard (equal-or-older payload): the fetch
+                    // itself succeeded (liveness already stamped above) — only the install was a
+                    // no-op. Count the guard rejection for failover observability (qfg-41nh.18).
+                    _failover?.RecordGuardRejected();
+                }
             }
+        }
+
+        // Failover observability: if more than the primary leg fired, the hedge fired its secondary
+        // leg this cycle (the primary was slow or errored). Recorded once per cycle regardless of
+        // which leg's payload won the guard (qfg-41nh.18).
+        if (fired > 1)
+        {
+            _failover?.RecordHedgeFired();
         }
 
         if (installedOnce)
@@ -945,6 +982,14 @@ public sealed class Quonfig : IQuonfig
             {
                 _supervisor?.RecordSuccessfulRefresh();
             }
+            else
+            {
+                // Guard-rejected SSE message (equal-or-older replay): count it for failover
+                // observability (qfg-41nh.18). Freshness is deliberately NOT stamped here (unlike
+                // the HTTP poll path) — a stale replay must not advance LastSuccessfulRefresh while
+                // the client is effectively frozen on old config (qfg-41nh.8).
+                _failover?.RecordGuardRejected();
+            }
             // Receiving an envelope means the SSE stream is live; update connection state and
             // tell the fallback poller it can stand down.
             _fallbackPoller?.SetSseConnected(true);
@@ -1039,6 +1084,13 @@ public sealed class Quonfig : IQuonfig
     /// suite's f05 assertion catches a regression that reintroduces stream-leg walking.
     /// </summary>
     internal bool SseFailedOverToSecondary => (_sseClient?.MaxConnectedStreamIndex ?? -1) > 0;
+
+    /// <summary>
+    /// Test/diagnostic: the failover-telemetry collector (hedge-fired / guard-rejected / resolved-from
+    /// counters), or <c>null</c> when telemetry is fully opted out. Lets tests drain the counters to
+    /// prove the failover call sites fired. (qfg-41nh.18)
+    /// </summary>
+    internal FailoverCollector? Failover => _failover;
 
     private void InstallEnvelope(ConfigEnvelope envelope)
     {

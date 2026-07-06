@@ -23,6 +23,7 @@ public sealed class TelemetryReporter : IAsyncDisposable
     private readonly EvaluationSummaryCollector _summaries;
     private readonly ContextShapeCollector _shapes;
     private readonly ExampleContextCollector _examples;
+    private readonly FailoverCollector? _failover;
     private readonly TimeSpan _initialDelay;
     private readonly TimeSpan _baseInterval;
     private readonly TimeSpan _maxInterval;
@@ -34,7 +35,11 @@ public sealed class TelemetryReporter : IAsyncDisposable
     private Task? _runTask;
     private bool _disposed;
 
-    /// <summary>Initializes a reporter. <see cref="Start"/> must be called to begin periodic flushes.</summary>
+    /// <summary>
+    /// Initializes a reporter. <see cref="Start"/> must be called to begin periodic flushes.
+    /// <paramref name="failover"/> is optional; when supplied its counters ride the same envelope as
+    /// the eval/context collectors (qfg-41nh.18).
+    /// </summary>
     public TelemetryReporter(
         ITelemetrySender sender,
         string instanceHash,
@@ -44,13 +49,15 @@ public sealed class TelemetryReporter : IAsyncDisposable
         TimeSpan initialDelay,
         TimeSpan baseInterval,
         TimeSpan maxInterval,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        FailoverCollector? failover = null)
     {
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
         _instanceHash = instanceHash ?? throw new ArgumentNullException(nameof(instanceHash));
         _summaries = summaries ?? throw new ArgumentNullException(nameof(summaries));
         _shapes = shapes ?? throw new ArgumentNullException(nameof(shapes));
         _examples = examples ?? throw new ArgumentNullException(nameof(examples));
+        _failover = failover;
         _initialDelay = initialDelay;
         _baseInterval = baseInterval;
         _maxInterval = maxInterval;
@@ -170,13 +177,15 @@ public sealed class TelemetryReporter : IAsyncDisposable
 
     private IDictionary<string, object?>? BuildEnvelope()
     {
-        var events = new List<IDictionary<string, object?>>(3);
+        var events = new List<IDictionary<string, object?>>(4);
         var s = _summaries.Drain();
         if (s is not null) events.Add(s);
         var sh = _shapes.Drain();
         if (sh is not null) events.Add(sh);
         var ex = _examples.Drain();
         if (ex is not null) events.Add(ex);
+        var fo = _failover?.Drain();
+        if (fo is not null) events.Add(fo);
         if (events.Count == 0) return null;
 
         return new Dictionary<string, object?>

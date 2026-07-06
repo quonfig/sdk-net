@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Failover telemetry emission (qfg-41nh.18).** The SDK now records failover-behavior counters and folds them into the periodic telemetry envelope as an additive `failover` event, alongside evaluation summaries and context shapes. The counters are: `hedgeFired` (config-fetch cycles whose parallel hedge fired the secondary leg), `guardRejected` (installs the reject-older ordering guard dropped, on both the HTTP config-fetch and SSE push paths), and `resolvedFromPrimary` / `resolvedFromSecondary` (which upstream leg served each successful HTTP install; SSE installs are not counted). `resolvedFromLkg` is reserved and always `0`. The event carries no user data, is emitted only when at least one counter is non-zero in the flush window (a healthy client emits nothing), and honors the existing telemetry opt-out (`CollectEvaluationSummaries = false` **and** `ContextUploadMode = None` records nothing). The wire field names are camelCase, matching the cross-SDK contract (mirrors sdk-go). No new dependencies.
+
 ## 1.1.1 - 2026-07-03
 
 Backward-compatible patch (qfg-41nh.8, part of the coordinated 1.1.1 hardening train).

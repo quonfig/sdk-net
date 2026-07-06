@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -166,5 +167,71 @@ public sealed class QuonfigHedgeTests
             "the hedge must have fired the secondary against the slow primary");
         // Heal forward to the slow primary's newer 42.
         await PollUntilGenerationAsync(client, 42, TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>
+    /// Failover telemetry call-site wiring (qfg-41nh.18): a slow OLDER primary + fast NEWER secondary
+    /// drives every failover signal through the real client — the hedge fires the secondary
+    /// (hedgeFired), the secondary's 42 installs (resolvedFromSecondary), and on the follow-up
+    /// refreshes the slow primary's older 41 (and the secondary's same-gen 42) are dropped by the
+    /// reject-older guard (guardRejected). Draining the client's collector proves the three
+    /// <c>_failover</c> record sites in <c>FetchAndInstallAsync</c> actually fired — the branches this
+    /// change added, not merely the collector in isolation.
+    /// </summary>
+    [Fact]
+    public async Task RecordsFailoverSignals_HedgeFired_ResolvedFromSecondary_GuardRejected()
+    {
+        using var primary = Upstream(generation: 41, delay: TimeSpan.FromMilliseconds(2500));
+        using var secondary = Upstream(generation: 42, delay: TimeSpan.Zero);
+
+        await using var client = NewHedgeClient(primary, secondary);
+        await client.InitAsync();
+
+        // The hedge fired the secondary and installed its newer 42.
+        await PollUntilGenerationAsync(client, 42, TimeSpan.FromSeconds(5));
+
+        // A couple of fully-drained refresh cycles: the slow primary's older 41 lands and is
+        // guard-rejected, the secondary's same-gen 42 is a no-op — both count as guard rejections.
+        await client.RefreshAsync();
+        await client.RefreshAsync();
+
+        client.Failover.Should().NotBeNull("telemetry is enabled by default, so the collector exists");
+        var ev = client.Failover!.Drain();
+        ev.Should().NotBeNull("real failover activity must produce a failover event");
+        var f = (IDictionary<string, object?>)ev!["failover"]!;
+
+        ((long)f["hedgeFired"]!).Should().BeGreaterThanOrEqualTo(1L,
+            "the slow primary must have triggered the hedge at least once");
+        ((long)f["resolvedFromSecondary"]!).Should().BeGreaterThanOrEqualTo(1L,
+            "the secondary's newer 42 must have been the installed leg");
+        ((long)f["resolvedFromPrimary"]!).Should().Be(0L,
+            "the slow older primary never won an install");
+        ((long)f["guardRejected"]!).Should().BeGreaterThanOrEqualTo(1L,
+            "an equal-or-older leg must have been dropped by the reject-older guard");
+    }
+
+    /// <summary>
+    /// A fast healthy primary is a steady-state client: the secondary never fires, nothing is
+    /// guard-rejected, and the only signal is resolvedFromPrimary. Confirms the hedgeFired site is
+    /// gated on the secondary actually firing (fired &gt; 1), not on every cycle.
+    /// </summary>
+    [Fact]
+    public async Task FastPrimary_RecordsOnlyResolvedFromPrimary_NoHedge_NoGuardReject()
+    {
+        using var primary = Upstream(generation: 41, delay: TimeSpan.Zero);
+        using var secondary = Upstream(generation: 42, delay: TimeSpan.Zero);
+
+        await using var client = NewHedgeClient(primary, secondary);
+        await client.InitAsync();
+        await PollUntilGenerationAsync(client, 41, TimeSpan.FromSeconds(5));
+
+        var ev = client.Failover!.Drain();
+        ev.Should().NotBeNull("the primary install records a resolvedFrom signal");
+        var f = (IDictionary<string, object?>)ev!["failover"]!;
+
+        ((long)f["resolvedFromPrimary"]!).Should().BeGreaterThanOrEqualTo(1L);
+        ((long)f["resolvedFromSecondary"]!).Should().Be(0L, "the secondary was never contacted");
+        ((long)f["hedgeFired"]!).Should().Be(0L, "a fast primary must not fire the hedge");
+        ((long)f["guardRejected"]!).Should().Be(0L, "nothing was dropped on a clean first install");
     }
 }
