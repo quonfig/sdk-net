@@ -58,6 +58,15 @@ public sealed class Quonfig : IQuonfig
     private string? _effectiveEnvironment;
 
     /// <summary>
+    /// Effective endpoints after applying <c>QUONFIG_DOMAIN</c> and the derive-stream-from-api rule
+    /// (see <see cref="EndpointResolver"/>). Used everywhere the client needs a URL; the raw
+    /// <see cref="QuonfigOptions"/> values are only inputs to this resolution.
+    /// </summary>
+    private readonly IReadOnlyList<string> _apiUrls;
+    private readonly IReadOnlyList<string> _streamUrls;
+    private readonly string _telemetryUrl;
+
+    /// <summary>
     /// The global context applied as the lowest-precedence layer to every evaluation. Equals
     /// <see cref="QuonfigOptions.GlobalContext"/> with the dev-only <c>quonfig-user.email</c>
     /// context merged UNDER it (customer keys win on collision) when dev-context injection is
@@ -139,6 +148,16 @@ public sealed class Quonfig : IQuonfig
         _opts = options;
         _logger = options.Logger ?? NullLogger.Instance;
 
+        // Resolve the effective endpoints once (QUONFIG_DOMAIN override + derive-stream-from-api).
+        // Every URL the client uses comes from here, not directly from options — a customer who
+        // overrides only ApiUrls (e.g. to staging) now streams from the matching stream host and
+        // has their telemetry follow, instead of silently hitting the production cluster.
+        var (apiUrls, streamUrls, telemetryUrl) = EndpointResolver.Resolve(
+            options, options.EnvLookup ?? System.Environment.GetEnvironmentVariable);
+        _apiUrls = apiUrls;
+        _streamUrls = streamUrls;
+        _telemetryUrl = telemetryUrl;
+
         // Failover counters carry no user data and are the operational signal for the
         // secondary-delivery hardening, so they ride any enabled telemetry stream regardless of the
         // eval/context sub-opt-outs — but a FULL telemetry opt-out (no eval summaries AND no context
@@ -175,8 +194,18 @@ public sealed class Quonfig : IQuonfig
         }
         else
         {
-            ValidateHttpMode(options);
+            ValidateHttpMode(options, _apiUrls);
             _isDeliveryMode = true;
+            // A single explicit ApiUrl disables automatic failover: the default (and every
+            // QUONFIG_DOMAIN-derived) list carries both a primary and a secondary leg that the SDK
+            // hedges/fails over between. An explicit override replaces that list wholesale, so a
+            // one-entry override silently drops the secondary. Warn once at construction (sdk-go
+            // parity, qfg-41nh.26/.27).
+            if (options.ApiUrlsExplicit && _apiUrls.Count < 2)
+            {
+                _logger.LogWarning(
+                    "quonfig: explicit ApiUrls disables automatic failover to the secondary; pass both primary and secondary URLs to keep it");
+            }
             // Delivery (SDK-key) mode: the server's meta.environment is authoritative, so an
             // explicit Environment pin (or QUONFIG_ENVIRONMENT) is ignored for evaluation. Warn
             // once at init so a mis-set pin doesn't silently no-op. Matches sdk-go, where the pin
@@ -429,7 +458,7 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
-    private static void ValidateHttpMode(QuonfigOptions opts)
+    private static void ValidateHttpMode(QuonfigOptions opts, IReadOnlyList<string> apiUrls)
     {
         if (string.IsNullOrEmpty(opts.SdkKey))
         {
@@ -437,7 +466,7 @@ public sealed class Quonfig : IQuonfig
                 "QuonfigOptions.SdkKey required for HTTP+SSE mode; set SdkKey or use Datadir/Datafile",
                 nameof(opts));
         }
-        if (opts.ApiUrls.Count == 0)
+        if (apiUrls.Count == 0)
         {
             throw new ArgumentException(
                 "QuonfigOptions.ApiUrls must contain at least one URL", nameof(opts));
@@ -456,7 +485,9 @@ public sealed class Quonfig : IQuonfig
     {
         if (!DevContextEnabled(options)) return options.GlobalContext;
 
-        var devContext = DevContext.Load(options.ApiUrls, options.EnvLookup, _logger);
+        // Use the RESOLVED api URLs so the per-domain tokens file matches a QUONFIG_DOMAIN / explicit
+        // ApiUrls override (e.g. staging), not the built-in production default.
+        var devContext = DevContext.Load(_apiUrls, options.EnvLookup, _logger);
         if (devContext is null) return options.GlobalContext;
 
         // Customer-supplied keys win on collision: customer GlobalContext is the overlay.
@@ -582,7 +613,7 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     private void LogStartupMode()
     {
-        bool sseConfigured = !string.IsNullOrEmpty(_opts.SdkKey) && _opts.StreamUrls.Count > 0;
+        bool sseConfigured = !string.IsNullOrEmpty(_opts.SdkKey) && _streamUrls.Count > 0;
         bool fallbackConfigured = _opts.FallbackPollEnabled && _opts.FallbackPollInterval > TimeSpan.Zero;
         string mode = sseConfigured
             ? (fallbackConfigured ? "sse-with-fallback-poll" : "sse-only")
@@ -610,7 +641,7 @@ public sealed class Quonfig : IQuonfig
         LogStartupMode();
         try
         {
-            var uris = _opts.ApiUrls.Select(u => new Uri(u, UriKind.Absolute));
+            var uris = _apiUrls.Select(u => new Uri(u, UriKind.Absolute));
             // Per-URL config-fetch timeout (qfg-7h5d.1.11): a hung primary aborts after
             // ConfigFetchTimeout on the SEQUENTIAL FetchAsync path. The init/refresh install path
             // uses the parallel hedge (qfg-7h5d.1.14): fire the primary first and, only if it is slow
@@ -827,9 +858,9 @@ public sealed class Quonfig : IQuonfig
     {
         if (Volatile.Read(ref _closed) != 0) return;
         if (string.IsNullOrEmpty(_opts.SdkKey)) return;
-        if (_opts.StreamUrls.Count == 0) return;
+        if (_streamUrls.Count == 0) return;
 
-        var streams = _opts.StreamUrls.Select(u => new Uri(u, UriKind.Absolute)).ToList();
+        var streams = _streamUrls.Select(u => new Uri(u, UriKind.Absolute)).ToList();
 
         var sseCts = new CancellationTokenSource();
         _sseCts = sseCts;
@@ -1091,6 +1122,15 @@ public sealed class Quonfig : IQuonfig
     /// prove the failover call sites fired. (qfg-41nh.18)
     /// </summary>
     internal FailoverCollector? Failover => _failover;
+
+    /// <summary>Test/diagnostic: the effective api URLs after <c>QUONFIG_DOMAIN</c> + explicit-override resolution.</summary>
+    internal IReadOnlyList<string> ResolvedApiUrls => _apiUrls;
+
+    /// <summary>Test/diagnostic: the effective SSE stream URLs (derived from <see cref="ResolvedApiUrls"/> unless set explicitly).</summary>
+    internal IReadOnlyList<string> ResolvedStreamUrls => _streamUrls;
+
+    /// <summary>Test/diagnostic: the effective telemetry URL after resolution.</summary>
+    internal string ResolvedTelemetryUrl => _telemetryUrl;
 
     private void InstallEnvelope(ConfigEnvelope envelope)
     {

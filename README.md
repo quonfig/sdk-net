@@ -35,6 +35,47 @@ This repo publishes four NuGet packages in lock-step from a single tag.
 | `Quonfig.Sdk.Extensions.Logging`     | `ILoggerProvider` filter — dynamic log levels via the BCL `Microsoft.Extensions.Logging` pipeline.      |
 | `Quonfig.Sdk.Serilog`                | Serilog `LoggingLevelSwitch` provider for dynamic log levels.                                            |
 
+## Failover & `QUONFIG_DOMAIN`
+
+By default the SDK derives every hostname from `QUONFIG_DOMAIN` (default `quonfig.com`):
+
+| Role                     | URL                                    |
+|--------------------------|----------------------------------------|
+| Config fetch (primary)   | `https://primary.quonfig.com`          |
+| SSE stream (primary)     | `https://stream.primary.quonfig.com`   |
+| Config fetch (secondary) | `https://secondary.quonfig.com`        |
+| SSE stream (secondary)   | `https://stream.secondary.quonfig.com` |
+| Telemetry                | `https://telemetry.quonfig.com`        |
+
+Set `QUONFIG_DOMAIN` to move all of them together (e.g. `QUONFIG_DOMAIN=quonfig-staging.com`
+points api, SSE, and telemetry at staging). **Automatic failover and hedging between the primary
+and the secondary are on by default** — the secondary runs on separate infrastructure, and the SDK
+fails over to it if the primary is unreachable and hedges to it if the primary is slow.
+
+`QuonfigOptions.ApiUrls` replaces the derived list wholesale and wins over `QUONFIG_DOMAIN`. The SSE
+stream URLs follow it automatically (each stream host is the api host with `stream.` prepended), and
+`QuonfigOptions.TelemetryUrl` still follows `QUONFIG_DOMAIN` unless you set it too. To keep automatic
+failover with custom URLs, **pass both a primary and a secondary URL**:
+
+```csharp
+var client = new Quonfig(new QuonfigOptions
+{
+    SdkKey = "your-sdk-key",
+    ApiUrls = new[]
+    {
+        "https://primary.your-proxy.example",
+        "https://secondary.your-proxy.example",
+    },
+    // StreamUrls left unset — derived as stream.primary.your-proxy.example / stream.secondary...
+});
+```
+
+A single URL disables failover, and the SDK logs a warning at construction
+(`quonfig: explicit ApiUrls disables automatic failover to the secondary; pass both primary and
+secondary URLs to keep it`). Set `StreamUrls` or `TelemetryUrl` explicitly to override the derived
+values. See
+[Reliability](https://docs.quonfig.com/docs/explanations/architecture/resiliency) for the full model.
+
 ## Target frameworks
 
 `net8.0` and `netstandard2.0`. Both are gated by CI on `ubuntu-latest` and `windows-latest`:

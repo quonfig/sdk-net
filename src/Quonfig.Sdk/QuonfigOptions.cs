@@ -21,30 +21,73 @@ public sealed class QuonfigOptions
     /// <summary>SDK key (used as the Basic-auth password against api-delivery). Required in HTTP+SSE mode.</summary>
     public string? SdkKey { get; set; }
 
-    /// <summary>
-    /// Ordered list of api-delivery base URLs (primary first, then failover). Defaults to the
-    /// production primary + secondary cluster.
-    /// </summary>
-    public IReadOnlyList<string> ApiUrls { get; set; } = new[]
+    /// <summary>Built-in production api-delivery base URLs (primary first, then failover).</summary>
+    internal static readonly IReadOnlyList<string> DefaultApiUrls = new[]
     {
         "https://primary.quonfig.com",
         "https://secondary.quonfig.com",
     };
 
-    /// <summary>
-    /// Ordered list of api-delivery SSE base URLs. Defaults to the production stream cluster.
-    /// Only <c>StreamUrls[0]</c> is ever streamed from: the SSE stream is pinned to the primary
-    /// and never fails over (retry-forever with backoff); failover is an HTTP-poll-only property
-    /// of <see cref="ApiUrls"/>.
-    /// </summary>
-    public IReadOnlyList<string> StreamUrls { get; set; } = new[]
+    /// <summary>Built-in production api-delivery SSE base URLs (derived by prepending <c>stream.</c> to each <see cref="DefaultApiUrls"/> host).</summary>
+    internal static readonly IReadOnlyList<string> DefaultStreamUrls = new[]
     {
         "https://stream.primary.quonfig.com",
         "https://stream.secondary.quonfig.com",
     };
 
-    /// <summary>api-telemetry base URL. Defaults to the production endpoint.</summary>
-    public string TelemetryUrl { get; set; } = "https://telemetry.quonfig.com";
+    /// <summary>Built-in production api-telemetry base URL.</summary>
+    internal const string DefaultTelemetryUrl = "https://telemetry.quonfig.com";
+
+    private IReadOnlyList<string> _apiUrls = DefaultApiUrls;
+    private IReadOnlyList<string> _streamUrls = DefaultStreamUrls;
+    private string _telemetryUrl = DefaultTelemetryUrl;
+
+    /// <summary>True once <see cref="ApiUrls"/> has been assigned — an explicit override wins over <c>QUONFIG_DOMAIN</c>.</summary>
+    internal bool ApiUrlsExplicit { get; private set; }
+
+    /// <summary>True once <see cref="StreamUrls"/> has been assigned — an explicit override wins over the derive-from-<see cref="ApiUrls"/> default.</summary>
+    internal bool StreamUrlsExplicit { get; private set; }
+
+    /// <summary>True once <see cref="TelemetryUrl"/> has been assigned — an explicit override wins over <c>QUONFIG_DOMAIN</c>.</summary>
+    internal bool TelemetryUrlExplicit { get; private set; }
+
+    /// <summary>
+    /// Ordered list of api-delivery base URLs (primary first, then failover). When unset, defaults
+    /// to the cluster derived from <c>QUONFIG_DOMAIN</c> (production <c>quonfig.com</c> when that env
+    /// var is unset): <c>primary.&lt;domain&gt;</c> + <c>secondary.&lt;domain&gt;</c>. Setting this
+    /// explicitly wins over <c>QUONFIG_DOMAIN</c> and replaces the whole list — a single URL disables
+    /// automatic failover to the secondary (the client logs a warning at construction).
+    /// </summary>
+    public IReadOnlyList<string> ApiUrls
+    {
+        get => _apiUrls;
+        set { _apiUrls = value; ApiUrlsExplicit = true; }
+    }
+
+    /// <summary>
+    /// Ordered list of api-delivery SSE base URLs. When unset, each entry is derived from the
+    /// corresponding <see cref="ApiUrls"/> host by prepending <c>stream.</c> (so an explicit
+    /// <see cref="ApiUrls"/> override — or a <c>QUONFIG_DOMAIN</c>-derived one — is followed by the
+    /// SSE stream automatically). Only <c>StreamUrls[0]</c> is ever streamed from: the SSE stream is
+    /// pinned to the primary and never fails over (retry-forever with backoff); failover is an
+    /// HTTP-poll-only property of <see cref="ApiUrls"/>.
+    /// </summary>
+    public IReadOnlyList<string> StreamUrls
+    {
+        get => _streamUrls;
+        set { _streamUrls = value; StreamUrlsExplicit = true; }
+    }
+
+    /// <summary>
+    /// api-telemetry base URL. When unset, defaults to the endpoint derived from <c>QUONFIG_DOMAIN</c>
+    /// (<c>telemetry.&lt;domain&gt;</c>, production <c>telemetry.quonfig.com</c> when that env var is
+    /// unset). Setting this explicitly wins over <c>QUONFIG_DOMAIN</c>.
+    /// </summary>
+    public string TelemetryUrl
+    {
+        get => _telemetryUrl;
+        set { _telemetryUrl = value; TelemetryUrlExplicit = true; }
+    }
 
     /// <summary>
     /// Environment slug evaluated against (e.g. <c>"production"</c>). Required in datadir mode;
