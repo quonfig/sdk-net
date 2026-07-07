@@ -62,8 +62,14 @@ public sealed class QuonfigHedgeTests
         return n;
     }
 
-    private static Quonfig NewHedgeClient(WireMockServer primary, WireMockServer secondary) =>
-        new Quonfig(new QuonfigOptions
+    /// <param name="hedgeDelay">Overrides the parallel-hedge delay. Defaults to null → the SDK's
+    /// production ~2s default (the fast-primary/cold-standby tests need the real default). A
+    /// slow-primary test can pass a small value to make the primary delay a large MULTIPLE of the
+    /// hedge delay, so runner scheduler jitter can never flip which fires first (qfg-y7o7).</param>
+    private static Quonfig NewHedgeClient(WireMockServer primary, WireMockServer secondary,
+        TimeSpan? hedgeDelay = null)
+    {
+        var opts = new QuonfigOptions
         {
             SdkKey = SdkKey,
             ApiUrls = new[] { primary.Urls[0], secondary.Urls[0] },
@@ -79,7 +85,13 @@ public sealed class QuonfigHedgeTests
             // draining the failover collector out from under the test's own Drain(). (qfg-gxm6)
             TelemetrySender = new NoopSender(),
             TelemetryInitialDelay = TimeSpan.FromMinutes(5),
-        });
+        };
+        if (hedgeDelay is { } hd)
+        {
+            opts.ConfigFetchHedgeDelay = hd;
+        }
+        return new Quonfig(opts);
+    }
 
     private sealed class NoopSender : ITelemetrySender
     {
@@ -172,10 +184,18 @@ public sealed class QuonfigHedgeTests
     [Fact]
     public async Task HealsForward_ToSlowNewerPrimary()
     {
-        using var primary = Upstream(generation: 42, delay: TimeSpan.FromMilliseconds(2500));
+        // Deterministic margin (qfg-y7o7): drive the hedge with a SMALL 200ms delay and keep the
+        // primary an order of magnitude slower (2000ms), so the hedge timer fires ~1800ms before the
+        // primary can settle. The old 2500ms-primary / 2000ms-default-hedge pairing left only a ~500ms
+        // margin; on a load-starved windows/net48 runner the Task.Delay(2s) timer slipped past the
+        // primary's 2.5s response, the primary won the WhenAny, the hedge was suppressed, and the
+        // secondary was never contacted (Hits==0). A 10x primary/hedge ratio can't be flipped by
+        // scheduler jitter, and the configurable ConfigFetchHedgeDelay keeps this off the ~2s default.
+        using var primary = Upstream(generation: 42, delay: TimeSpan.FromMilliseconds(2000));
         using var secondary = Upstream(generation: 41, delay: TimeSpan.Zero);
 
-        await using var client = NewHedgeClient(primary, secondary);
+        await using var client = NewHedgeClient(primary, secondary,
+            hedgeDelay: TimeSpan.FromMilliseconds(200));
         await client.InitAsync();
 
         Hits(secondary).Should().BeGreaterThan(0,
