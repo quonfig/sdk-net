@@ -33,10 +33,6 @@ public sealed class DeliveryEnvironmentTests
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
-            // qfg-gxm6: opt out of telemetry so the now-live reporter does not post to the default
-            // (production) telemetry endpoint. The dotnet.ts generator should emit this for delivery
-            // tests to match sdk-go's WithAllTelemetryDisabled() / sdk-java's disableTelemetry(true);
-            // added here as a stopgap until that generator parity lands.
             CollectEvaluationSummaries = false,
             ContextUploadMode = ContextUploadMode.None,
         });
@@ -64,8 +60,6 @@ public sealed class DeliveryEnvironmentTests
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
             Environment = "staging",
-            // qfg-gxm6: opt out of telemetry so the now-live reporter does not post to the default
-            // (production) telemetry endpoint (see the note on the generator parity above).
             CollectEvaluationSummaries = false,
             ContextUploadMode = ContextUploadMode.None,
         });
@@ -92,10 +86,6 @@ public sealed class DeliveryEnvironmentTests
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
-            // qfg-gxm6: opt out of telemetry so the now-live reporter does not post to the default
-            // (production) telemetry endpoint. The dotnet.ts generator should emit this for delivery
-            // tests to match sdk-go's WithAllTelemetryDisabled() / sdk-java's disableTelemetry(true);
-            // added here as a stopgap until that generator parity lands.
             CollectEvaluationSummaries = false,
             ContextUploadMode = ContextUploadMode.None,
         });
