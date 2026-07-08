@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0 - 2026-07-08
 
 - **`QUONFIG_BACKEND_SDK_KEY` / `QUONFIG_ENVIRONMENT` env-var fallbacks (qfg-2qcq.1).** `QuonfigOptions.SdkKey` now falls back to the `QUONFIG_BACKEND_SDK_KEY` env var and `QuonfigOptions.Environment` falls back to `QUONFIG_ENVIRONMENT` when the matching option is left unset, so a service that exports the canonical vars (as `qfg run` and the `fly.*.toml` configs do) can construct with a bare `new Quonfig.Sdk.Quonfig(new QuonfigOptions())`. Precedence is **explicit option > env var** in both cases, matching sdk-go, sdk-node, sdk-python, and sdk-java. In HTTP+SSE (delivery) mode an env-provided `QUONFIG_BACKEND_SDK_KEY` satisfies the SDK-key requirement; in datadir mode an env-provided `QUONFIG_ENVIRONMENT` satisfies the environment requirement. A `QUONFIG_ENVIRONMENT` pin still no-ops (with the existing WARN) in delivery mode, where the SDK key determines the active environment. The `QuonfigOptions.EnvLookup` override still governs the lookup for tests/DI. Additive and backward-compatible; no new dependencies.
 
