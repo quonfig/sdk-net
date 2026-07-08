@@ -165,12 +165,32 @@ public sealed class Quonfig : IQuonfig
         _opts = options;
         _logger = options.Logger ?? NullLogger.Instance;
 
+        var envLookup = options.EnvLookup ?? System.Environment.GetEnvironmentVariable;
+
+        // Cross-SDK env-var fallbacks (option wins over env). QUONFIG_BACKEND_SDK_KEY seeds the SDK
+        // key and QUONFIG_ENVIRONMENT seeds the evaluation environment when the caller left the
+        // matching option unset, so a service that exports the canonical vars (as `qfg run` and every
+        // fly.*.toml do) constructs with a bare `new QuonfigOptions()`. Mirrors sdk-go
+        // (applyAPIKeyEnvOverride / applyEnvironmentEnvOverride), sdk-python (client.py),
+        // sdk-node and sdk-java. Applied in place before mode validation so an env-provided key
+        // satisfies ValidateHttpMode and an env-provided environment satisfies datadir mode; a
+        // QUONFIG_ENVIRONMENT pin still no-ops (with the same WARN) in delivery mode, matching sdk-go.
+        if (string.IsNullOrEmpty(options.SdkKey))
+        {
+            var envSdkKey = envLookup("QUONFIG_BACKEND_SDK_KEY");
+            if (!string.IsNullOrEmpty(envSdkKey)) options.SdkKey = envSdkKey;
+        }
+        if (string.IsNullOrEmpty(options.Environment))
+        {
+            var envEnvironment = envLookup("QUONFIG_ENVIRONMENT");
+            if (!string.IsNullOrEmpty(envEnvironment)) options.Environment = envEnvironment;
+        }
+
         // Resolve the effective endpoints once (QUONFIG_DOMAIN override + derive-stream-from-api).
         // Every URL the client uses comes from here, not directly from options — a customer who
         // overrides only ApiUrls (e.g. to staging) now streams from the matching stream host and
         // has their telemetry follow, instead of silently hitting the production cluster.
-        var (apiUrls, streamUrls, telemetryUrl) = EndpointResolver.Resolve(
-            options, options.EnvLookup ?? System.Environment.GetEnvironmentVariable);
+        var (apiUrls, streamUrls, telemetryUrl) = EndpointResolver.Resolve(options, envLookup);
         _apiUrls = apiUrls;
         _streamUrls = streamUrls;
         _telemetryUrl = telemetryUrl;
