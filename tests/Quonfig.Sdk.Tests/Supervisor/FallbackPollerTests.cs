@@ -22,15 +22,65 @@ namespace Quonfig.Sdk.Tests.Supervisor;
     Justification = "Tests assert on counters; broad catch is fine.")]
 public sealed class FallbackPollerTests
 {
+    // --- Timing scaffolding (qfg-7gri) ---------------------------------------
+    //
+    // Every absolute deadline in this class has to be a generous MULTIPLE of the
+    // poller interval/threshold it races, the same "decisive margin" rule the hedge
+    // de-flakes landed (b8f5f79, efbbb69). The poller under test arms on the
+    // order of milliseconds, but the work that has to happen for the assertion
+    // to become true — the Supervisor's Task.Run worker being scheduled at all —
+    // is at the mercy of the runner's ThreadPool. On windows/net48 the .NET
+    // Framework pool grows only ~1-2 threads/sec past minThreads, so once the
+    // suite got heavier (WireMock-backed hedge tests) a worker could sit
+    // unscheduled for hundreds of ms and blow a 500ms budget: run 28954129116
+    // failed here with "waitFor timed out: poller never engaged".
+
+    /// <summary>
+    /// Budget for every <see cref="WaitForAsync"/> gate in this class. This is a
+    /// TIMEOUT, not a sleep — WaitForAsync returns the instant its predicate is
+    /// true, so a generous value costs a healthy runner nothing — none of these
+    /// gates takes more than a few ms when the pool is idle — and only buys
+    /// headroom on a starved one. The per-call 500ms/1s budgets it replaces were
+    /// the thing that flaked.
+    /// </summary>
+    private static readonly TimeSpan WaitBudget = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Quiet window for the "and then nothing happened" assertions. A longer
+    /// window only makes those assertions stronger, so this is safe to be
+    /// generous with.
+    /// </summary>
+    private static readonly TimeSpan SettleWindow = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Threshold for <see cref="ReconnectBeforeThresholdCancelsEngagement"/>,
+    /// paired with <see cref="ReconnectBefore"/>. That test is the one place a
+    /// wall-clock sleep is load-bearing rather than a mere timeout: it has to
+    /// reconnect while the armed threshold timer is still pending. The old
+    /// pairing was a 100ms threshold against a bare Task.Delay(20) — an 80ms
+    /// margin that one starved scheduler slip eats, at which point the poller
+    /// legitimately engages and the test fails on a timer that really did fire.
+    /// 2s vs 50ms is a 40x ratio (~1.95s of absolute slack), beating the 10x /
+    /// ~1.8s margin efbbb69 established as jitter-proof.
+    /// </summary>
+    private static readonly TimeSpan CancelThreshold = TimeSpan.FromSeconds(2);
+
+    /// <summary>Disconnected dwell before the cancelling reconnect. Long enough
+    /// that the worker has observed the disconnect and armed (so the test isn't
+    /// vacuous), tiny next to <see cref="CancelThreshold"/>.</summary>
+    private static readonly TimeSpan ReconnectBefore = TimeSpan.FromMilliseconds(50);
+
     private static async Task WaitForAsync(TimeSpan timeout, Func<bool> predicate, string msg)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var start = DateTime.UtcNow;
+        var deadline = start + timeout;
         while (DateTime.UtcNow < deadline)
         {
             if (predicate()) return;
             await Task.Delay(2);
         }
-        throw new Xunit.Sdk.XunitException("waitFor timed out: " + msg);
+        throw new Xunit.Sdk.XunitException(
+            $"waitFor timed out after {(DateTime.UtcNow - start).TotalMilliseconds:F0}ms: {msg}");
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -59,7 +109,7 @@ public sealed class FallbackPollerTests
         try
         {
             p.SetSseConnected(true);
-            await Task.Delay(60);
+            await Task.Delay(SettleWindow);
             fetches.Should().Be(0, "expected 0 fetches while connected");
             p.Active.Should().BeFalse("expected active=false while connected");
         }
@@ -84,7 +134,7 @@ public sealed class FallbackPollerTests
         try
         {
             p.SetSseConnected(false);
-            await WaitForAsync(TimeSpan.FromSeconds(1),
+            await WaitForAsync(WaitBudget,
                 () => Volatile.Read(ref fetches) >= 2,
                 "poller never engaged and fetched after threshold");
             p.Active.Should().BeTrue("expected active=true while engaged");
@@ -103,15 +153,21 @@ public sealed class FallbackPollerTests
         int fetches = 0;
         var p = new FallbackPoller(
             interval: TimeSpan.FromMilliseconds(5),
-            threshold: TimeSpan.FromMilliseconds(100),
+            threshold: CancelThreshold,
             fetch: _ => { Interlocked.Increment(ref fetches); return Task.CompletedTask; });
         var s = Supervise(p);
         try
         {
             p.SetSseConnected(false);
-            await Task.Delay(20); // well below 100ms threshold
+            // 50ms of disconnected dwell — 40x inside the 2s threshold, so no
+            // amount of scheduler slip can push the reconnect past the timer
+            // (qfg-7gri; the old 20ms-vs-100ms pairing left only 80ms).
+            await Task.Delay(ReconnectBefore);
             p.SetSseConnected(true);
-            await Task.Delay(150); // past original threshold
+            // Sleep past the point the original (now-cancelled) timer would have
+            // fired — the threshold runs from the DISCONNECT, so wait the whole
+            // threshold again plus a quiet window.
+            await Task.Delay(CancelThreshold + SettleWindow);
             fetches.Should().Be(0, "expected 0 fetches when reconnect beats threshold");
             p.Active.Should().BeFalse("poller should never have engaged");
         }
@@ -136,8 +192,7 @@ public sealed class FallbackPollerTests
         try
         {
             p.SetSseConnected(false);
-            await WaitForAsync(TimeSpan.FromMilliseconds(500), () => p.Active, "poller never engaged");
-            int atEngage = Volatile.Read(ref fetches);
+            await WaitForAsync(WaitBudget, () => p.Active, "poller never engaged");
             p.SetSseConnected(true);
             // Wait on the disengage callback rather than `!p.Active`. The worker
             // flips `_engaged = false` inside the lock and fires `_onDisengage`
@@ -145,15 +200,23 @@ public sealed class FallbackPollerTests
             // observe the new Active state before the callback runs. The contract
             // under test is the callback, so we gate on it directly. Active is
             // separately re-checked below.
-            await WaitForAsync(TimeSpan.FromMilliseconds(500),
+            await WaitForAsync(WaitBudget,
                 () => Volatile.Read(ref disengageCount) >= 1,
                 "disengage callback never fired after reconnect");
             disengageCount.Should().Be(1, "expected exactly 1 disengage callback");
             p.Active.Should().BeFalse("poller should be inactive once disengage fired");
-            await Task.Delay(50);
+            // Anchor the "fetches stopped" window at the DISENGAGE, not at the
+            // engage (qfg-7gri). The contract under test is that no fetch happens
+            // AFTER disengage; how many 5ms ticks land between engage and
+            // reconnect is just a function of how promptly the test thread was
+            // scheduled, and on a starved runner that count is unbounded — an
+            // engage-anchored budget flakes for a reason the poller isn't
+            // responsible for.
+            int atDisengage = Volatile.Read(ref fetches);
+            await Task.Delay(SettleWindow);
             // Allow one in-flight tick to race with disengage.
-            Volatile.Read(ref fetches).Should().BeLessThanOrEqualTo(atEngage + 1,
-                $"fetches kept growing after disengage: had {atEngage}, now {fetches}");
+            Volatile.Read(ref fetches).Should().BeLessThanOrEqualTo(atDisengage + 1,
+                $"fetches kept growing after disengage: had {atDisengage}, now {fetches}");
         }
         finally
         {
@@ -178,7 +241,7 @@ public sealed class FallbackPollerTests
         try
         {
             p.SetSseConnected(false);
-            await WaitForAsync(TimeSpan.FromMilliseconds(500),
+            await WaitForAsync(WaitBudget,
                 () => Volatile.Read(ref fetches) >= 3,
                 "poller stopped fetching after error");
         }
