@@ -137,9 +137,18 @@ public sealed class FallbackPoller
             {
                 Action_ action;
                 TimeSpan wait;
+                // The SSE state this tick's decision was made against. It is carried
+                // into the wait below as the edge baseline instead of being re-read
+                // there: between releasing the lock and entering the wait we run this
+                // tick's side effects (engage/disengage callbacks, the fetch), and a
+                // SetSseConnected that lands in that gap must still count as an edge
+                // (qfg-vov2). Re-reading swallowed it and slept the full duration —
+                // one hour on the connected branch.
+                bool connectedAtDecision;
                 lock (_lock)
                 {
-                    if (_sseConnected)
+                    connectedAtDecision = _sseConnected;
+                    if (connectedAtDecision)
                     {
                         if (engagedLocal)
                         {
@@ -206,7 +215,8 @@ public sealed class FallbackPoller
                 // immediately, then re-check state.
                 try
                 {
-                    await DelayWithPulseAsync(wait, ctx.StopToken).ConfigureAwait(false);
+                    await DelayWithPulseAsync(wait, connectedAtDecision, ctx.StopToken)
+                        .ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -232,7 +242,13 @@ public sealed class FallbackPoller
     /// <see cref="Monitor"/> can't await asynchronously; the tick is bounded by
     /// the requested duration so callers paying for a long sleep don't busy-loop.
     /// </summary>
-    private async Task DelayWithPulseAsync(TimeSpan duration, CancellationToken stop)
+    /// <param name="duration">Maximum time to wait.</param>
+    /// <param name="baseline">The <c>_sseConnected</c> value the caller's wait
+    /// decision was made against. Passed in rather than re-read here so a state
+    /// change that lands between the caller's lock release and this wait is still
+    /// seen as an edge (qfg-vov2).</param>
+    /// <param name="stop">Stop token; cancellation unblocks the wait.</param>
+    private async Task DelayWithPulseAsync(TimeSpan duration, bool baseline, CancellationToken stop)
     {
         if (duration <= TimeSpan.Zero) return;
         // Use a short polling tick so SetSseConnected edges arrive fast in tests
@@ -242,14 +258,17 @@ public sealed class FallbackPoller
             ? duration
             : TimeSpan.FromMilliseconds(5);
         var deadline = DateTime.UtcNow + duration;
-        bool startedConnected;
-        lock (_lock) { startedConnected = _sseConnected; }
+        // Checked BEFORE the first sleep as well as after every tick: the edge may
+        // already have landed in the caller's post-lock window, in which case there
+        // is nothing left to wait for.
+        bool connectedNow;
+        lock (_lock) { connectedNow = _sseConnected; }
+        if (connectedNow != baseline) return; // edge — re-evaluate.
         while (DateTime.UtcNow < deadline)
         {
             await Task.Delay(tick, stop).ConfigureAwait(false);
-            bool connectedNow;
             lock (_lock) { connectedNow = _sseConnected; }
-            if (connectedNow != startedConnected) return; // edge — re-evaluate.
+            if (connectedNow != baseline) return; // edge — re-evaluate.
         }
     }
 

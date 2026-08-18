@@ -250,4 +250,108 @@ public sealed class FallbackPollerTests
             await s.StopAsync();
         }
     }
+
+    // --- Lost-edge regressions (qfg-vov2) ------------------------------------
+    //
+    // RunAsync decides its wait duration while holding `_lock`, then RELEASES the
+    // lock, runs that tick's side effects (onEngage / onDisengage / fetch), and
+    // only then enters DelayWithPulseAsync. Before qfg-vov2 that method sampled
+    // `_sseConnected` a SECOND time, under its own lock acquisition, to establish
+    // the baseline it watches for an edge — so a SetSseConnected() that landed in
+    // the gap was already folded into the baseline and could never register as a
+    // change. The worker then slept the FULL decided duration: one hour on the
+    // connected branch (FallbackPoller.cs:155), one interval on the engaged one.
+    //
+    // Those side-effect callbacks run on the worker thread from inside that exact
+    // gap, which makes them a deterministic injection point for the interleaving —
+    // no fake clock, no sleeps, no racing the scheduler for the window.
+
+    // Test 6 — A disconnect delivered inside the disengage window must still engage.
+    // This is the severe direction: the wait the worker had just decided on is the
+    // connected branch's one hour, so a lost edge here idles Layer 2 for up to an
+    // hour during the very SSE outage it exists to cover.
+    [Fact]
+    public async Task DisconnectDuringDisengageWindowStillEngages()
+    {
+        int engageCount = 0;
+        int disengageCount = 0;
+        FallbackPoller p = null!;
+        p = new FallbackPoller(
+            interval: TimeSpan.FromMilliseconds(10),
+            threshold: TimeSpan.FromMilliseconds(20),
+            fetch: _ => Task.CompletedTask,
+            onEngage: () => Interlocked.Increment(ref engageCount),
+            onDisengage: () =>
+            {
+                // Inside the window. Only inject on the first disengage so the
+                // test drives exactly one interleaving.
+                if (Interlocked.Increment(ref disengageCount) == 1)
+                {
+                    p.SetSseConnected(false);
+                }
+            });
+        var s = Supervise(p);
+        try
+        {
+            p.SetSseConnected(false);
+            await WaitForAsync(WaitBudget,
+                () => Volatile.Read(ref engageCount) >= 1,
+                "poller never engaged the first time");
+
+            // Reconnect: the worker takes the disengage branch, decides on the
+            // connected branch's 1h wait, and fires onDisengage — which drops SSE
+            // again before the worker starts waiting.
+            p.SetSseConnected(true);
+            await WaitForAsync(WaitBudget,
+                () => Volatile.Read(ref disengageCount) >= 1,
+                "disengage callback never fired after reconnect");
+            await WaitForAsync(WaitBudget,
+                () => Volatile.Read(ref engageCount) >= 2,
+                "poller never re-engaged — the disconnect delivered inside the disengage window was lost, so the worker sat on its 1h connected-branch wait (qfg-vov2)");
+            p.Active.Should().BeTrue("poller should be engaged again after the injected disconnect");
+        }
+        finally
+        {
+            await s.StopAsync();
+        }
+    }
+
+    // Test 7 — A reconnect delivered inside the fetch window must still disengage.
+    // Symmetric direction: the decided wait is one INTERVAL, so a lost edge here
+    // keeps Layer 2 polling a healthy stream for a full interval. The interval is
+    // 30s — 3x WaitBudget — so a lost edge cannot pass by being merely slow.
+    [Fact]
+    public async Task ReconnectDuringFetchWindowStillDisengages()
+    {
+        int fetches = 0;
+        int disengageCount = 0;
+        FallbackPoller p = null!;
+        p = new FallbackPoller(
+            interval: TimeSpan.FromSeconds(30),
+            threshold: TimeSpan.FromMilliseconds(20),
+            fetch: _ =>
+            {
+                // Inside the window: the engaged tick's fetch runs after the lock
+                // is released and before the wait's baseline is taken.
+                if (Interlocked.Increment(ref fetches) == 1)
+                {
+                    p.SetSseConnected(true);
+                }
+                return Task.CompletedTask;
+            },
+            onDisengage: () => Interlocked.Increment(ref disengageCount));
+        var s = Supervise(p);
+        try
+        {
+            p.SetSseConnected(false);
+            await WaitForAsync(WaitBudget,
+                () => Volatile.Read(ref disengageCount) >= 1,
+                "poller never disengaged — the reconnect delivered inside the fetch window was lost, so the worker sat on its full 30s interval (qfg-vov2)");
+            p.Active.Should().BeFalse("poller should be idle once the reconnect is observed");
+        }
+        finally
+        {
+            await s.StopAsync();
+        }
+    }
 }
