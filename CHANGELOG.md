@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.1 - 2026-08-19
 
 - **Fallback poller no longer loses an SSE state edge (qfg-vov2).** The Layer 2 fallback poller decided each tick's wait duration while holding its lock, then released the lock, ran that tick's side effects (engage/disengage callbacks and the fetch), and only then sampled `_sseConnected` a **second** time to establish the baseline it watches for a connection-state change. Any `SetSseConnected()` delivered in that gap was already folded into the baseline, so it never registered as an edge and the worker slept the **full** duration it had decided on: **one hour** on the connected branch, one poll interval on the engaged one. In the severe direction an SSE disconnect that landed in the gap left Layer 2 idle for up to an hour — precisely the outage Layer 2 exists to cover — with the client serving stale config and no fallback polling; in the symmetric direction a reconnect that landed in the gap kept the poller fetching over a healthy stream for a full interval before disengaging. The wait now takes the state the decision was made against as an explicit baseline (and checks it once before the first sleep), so a change in the gap is seen immediately. This matches sdk-go, whose `fallback_poller.go` latches state edges on a buffered channel and cannot lose them. Behavior-only fix; no API change, no new dependencies.
 
