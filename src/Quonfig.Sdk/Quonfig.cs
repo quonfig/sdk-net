@@ -850,10 +850,10 @@ public sealed class Quonfig : IQuonfig
                     continue; // 304 — nothing changed on this leg.
                 }
                 // Reject-older guard + install are atomic under _installLock against every other
-                // install path (SSE, fallback poller). TryInstallFromNetwork sets the held generation,
+                // install path (SSE, fallback poller). InstallFromNetwork sets the held generation,
                 // install count, and resolved-from leg together (resolvedFrom set atomically with held).
-                bool installed = TryInstallFromNetwork(leg.Envelope, leg.LegIndex);
-                if (installed)
+                var outcome = InstallFromNetwork(leg.Envelope, leg.LegIndex);
+                if (outcome == NetworkInstallOutcome.Installed)
                 {
                     // Failover observability: record which leg (primary index 0 / secondary index
                     // > 0) served the config now held (qfg-41nh.18).
@@ -869,13 +869,19 @@ public sealed class Quonfig : IQuonfig
                         }
                     }
                 }
-                else
+                else if (outcome == NetworkInstallOutcome.RejectedOlder)
                 {
-                    // A 200 dropped by the reject-older guard (equal-or-older payload): the fetch
-                    // itself succeeded (liveness already stamped above) — only the install was a
-                    // no-op. Count the guard rejection for failover observability (qfg-41nh.18).
+                    // A 200 dropped by the reject-older guard because it was STRICTLY older than the
+                    // held generation: a leg tried to move this client backwards. That is the failover
+                    // signal worth alerting on, so count it (qfg-41nh.18, narrowed by qfg-rr5b). The
+                    // fetch itself succeeded (liveness already stamped above) — only the install was a
+                    // no-op.
                     _failover?.RecordGuardRejected();
                 }
+                // NetworkInstallOutcome.RejectedSameGeneration: the server answered with the config we
+                // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the
+                // fallback poller's engage-time fetch). Nothing to install and nothing wrong — a silent
+                // no-op, deliberately NOT counted as guardRejected (qfg-rr5b).
             }
         }
 
@@ -1101,19 +1107,25 @@ public sealed class Quonfig : IQuonfig
             // FetchAndInstallAsync, where an answered request with nothing newer IS a
             // successful refresh — there the CLIENT asked and the server answered; here the
             // server pushed something the guard had to discard.
-            bool installed = TryInstallFromNetwork(envelope, sourceIndex: -1);
-            if (installed)
+            var outcome = InstallFromNetwork(envelope, sourceIndex: -1);
+            if (outcome == NetworkInstallOutcome.Installed)
             {
                 _supervisor?.RecordSuccessfulRefresh();
             }
-            else
+            else if (outcome == NetworkInstallOutcome.RejectedOlder)
             {
-                // Guard-rejected SSE message (equal-or-older replay): count it for failover
-                // observability (qfg-41nh.18). Freshness is deliberately NOT stamped here (unlike
-                // the HTTP poll path) — a stale replay must not advance LastSuccessfulRefresh while
-                // the client is effectively frozen on old config (qfg-41nh.8).
+                // A STRICTLY older pushed envelope — a stale replay trying to move this client
+                // backwards. Count it for failover observability (qfg-41nh.18, narrowed by qfg-rr5b).
+                // Freshness is deliberately NOT stamped here (unlike the HTTP poll path) — a stale
+                // replay must not advance LastSuccessfulRefresh while the client is effectively frozen
+                // on old config (qfg-41nh.8).
                 _failover?.RecordGuardRejected();
             }
+            // NetworkInstallOutcome.RejectedSameGeneration: api-delivery's sendInitialConfig re-sends
+            // the CURRENT envelope on every connect (SDK clients send no Last-Event-Id), so every SSE
+            // reconnect re-delivers config this client already holds. Nothing to install and nothing
+            // wrong — a silent no-op, deliberately NOT counted as guardRejected, and (as before) not
+            // stamped either (qfg-rr5b).
             // Receiving an envelope means the SSE stream is live; update connection state and
             // tell the fallback poller it can stand down.
             _fallbackPoller?.SetSseConnected(true);
@@ -1140,9 +1152,15 @@ public sealed class Quonfig : IQuonfig
     ///     second leg can't re-install or flap.</description></item>
     /// </list>
     /// The decision and the install are taken under <see cref="_installLock"/> so they are atomic
-    /// with respect to every other network install path. Returns true if the envelope was installed.
+    /// with respect to every other network install path.
+    ///
+    /// <para>The two rejection shapes are reported separately (<see cref="NetworkInstallOutcome"/>)
+    /// because they mean different things to failover telemetry: only a STRICTLY older payload is a
+    /// leg trying to move the client backwards (<c>guardRejected</c>), while an equal-generation
+    /// re-delivery is ordinary steady-state traffic (qfg-rr5b). The INSTALL decision is identical for
+    /// both — neither is installed.</para>
     /// </summary>
-    private bool TryInstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
+    private NetworkInstallOutcome InstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
     {
         lock (_installLock)
         {
@@ -1152,10 +1170,13 @@ public sealed class Quonfig : IQuonfig
             // == 0) always installs, even at generation 0. An UNVERSIONED snapshot (incoming <= 0 —
             // a server that predates the watermark, or one whose rev-count failed) carries no
             // ordering info, so it is never rejected as "older"; freezing the client on stale
-            // config would be worse (mirrors sdk-node's carve-out).
+            // config would be worse (mirrors sdk-node's carve-out). Because of that carve-out a
+            // rejection always has incoming > 0, so equal-vs-older is a clean split.
             if (_networkInstallCount > 0 && incoming > 0 && incoming <= _heldGeneration)
             {
-                return false;
+                return incoming == _heldGeneration
+                    ? NetworkInstallOutcome.RejectedSameGeneration
+                    : NetworkInstallOutcome.RejectedOlder;
             }
             InstallEnvelope(envelope);
             _heldGeneration = incoming;
@@ -1164,8 +1185,31 @@ public sealed class Quonfig : IQuonfig
             {
                 _resolvedFromIndex = sourceIndex;
             }
-            return true;
+            return NetworkInstallOutcome.Installed;
         }
+    }
+
+    /// <summary>
+    /// What the reject-older guard did with an envelope arriving on a network install path. The two
+    /// rejection shapes are distinguished only for failover telemetry (qfg-rr5b) — neither installs.
+    /// </summary>
+    private enum NetworkInstallOutcome
+    {
+        /// <summary>The envelope advanced the watermark (or hit the fresh-client / unversioned carve-out) and was installed.</summary>
+        Installed,
+
+        /// <summary>
+        /// The incoming generation EQUALLED the held generation: the server re-delivered config this
+        /// client already holds (SSE reconnect resend, cold-ETag poll, fallback-poller engage fetch).
+        /// A silent no-op — normal steady-state traffic, never counted as <c>guardRejected</c>.
+        /// </summary>
+        RejectedSameGeneration,
+
+        /// <summary>
+        /// The incoming generation was STRICTLY LOWER than the held generation: a leg tried to move
+        /// this client backwards. This is the only shape counted as <c>guardRejected</c>.
+        /// </summary>
+        RejectedOlder,
     }
 
     /// <summary>

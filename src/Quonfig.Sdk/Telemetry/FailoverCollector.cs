@@ -43,8 +43,14 @@ public sealed class FailoverCollector
     }
 
     /// <summary>
-    /// Records one install dropped by the reject-older ordering guard — an equal-or-older snapshot on
-    /// any network install path (HTTP config-fetch or SSE push).
+    /// Records one install dropped by the reject-older ordering guard because it was STRICTLY OLDER
+    /// than the held generation, on any network install path (HTTP config-fetch or SSE push) — i.e. a
+    /// leg tried to move the client backwards, which is the thing this counter exists to surface.
+    ///
+    /// <para>An EQUAL-generation re-delivery (SSE reconnect resend, cold-ETag poll, fallback-poller
+    /// engage fetch) is also dropped by the guard but is NOT recorded here: the server re-sending
+    /// config the client already holds is ordinary steady-state traffic, and counting it polluted the
+    /// <c>sdk_failover</c> signal (qfg-rr5b).</para>
     /// </summary>
     public void RecordGuardRejected()
     {

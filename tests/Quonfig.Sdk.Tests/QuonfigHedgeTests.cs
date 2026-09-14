@@ -208,8 +208,9 @@ public sealed class QuonfigHedgeTests
     /// Failover telemetry call-site wiring (qfg-41nh.18): a slow OLDER primary + fast NEWER secondary
     /// drives every failover signal through the real client — the hedge fires the secondary
     /// (hedgeFired), the secondary's 42 installs (resolvedFromSecondary), and on the follow-up
-    /// refreshes the slow primary's older 41 (and the secondary's same-gen 42) are dropped by the
-    /// reject-older guard (guardRejected). Draining the client's collector proves the three
+    /// refreshes the slow primary's STRICTLY older 41 is dropped by the reject-older guard and counted
+    /// (guardRejected; the secondary's same-generation 42 is dropped too but is deliberately not
+    /// counted since qfg-rr5b). Draining the client's collector proves the three
     /// <c>_failover</c> record sites in <c>FetchAndInstallAsync</c> actually fired — the branches this
     /// change added, not merely the collector in isolation.
     /// </summary>
@@ -228,8 +229,9 @@ public sealed class QuonfigHedgeTests
         // The hedge fired the secondary and installed its newer 42.
         await PollUntilGenerationAsync(client, 42, TimeSpan.FromSeconds(5));
 
-        // A couple of fully-drained refresh cycles: the slow primary's older 41 lands and is
-        // guard-rejected, the secondary's same-gen 42 is a no-op — both count as guard rejections.
+        // A couple of fully-drained refresh cycles: the slow primary's STRICTLY older 41 lands, is
+        // guard-rejected and IS counted; the secondary's same-generation 42 is a silent no-op that is
+        // NOT counted (qfg-rr5b).
         await client.RefreshAsync();
         await client.RefreshAsync();
 
@@ -245,7 +247,8 @@ public sealed class QuonfigHedgeTests
         ((long)f["resolvedFromPrimary"]!).Should().Be(0L,
             "the slow older primary never won an install");
         ((long)f["guardRejected"]!).Should().BeGreaterThanOrEqualTo(1L,
-            "an equal-or-older leg must have been dropped by the reject-older guard");
+            "the slow primary's STRICTLY older 41 must have been dropped and counted by the reject-older "
+            + "guard (the secondary's same-generation 42 is dropped too, but is no longer counted — qfg-rr5b)");
     }
 
     /// <summary>
