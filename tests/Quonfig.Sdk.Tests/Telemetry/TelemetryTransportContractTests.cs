@@ -150,6 +150,13 @@ public sealed class TelemetryTransportContractTests : IAsyncDisposable
         HttpTelemetrySender.DefaultTimeout.Should().Be(TimeSpan.FromSeconds(15));
     }
 
+    [Fact]
+    public void Defaults_ContextUploadModeIsPeriodicExample()
+    {
+        // Decided 2026-09-25 (policy plan, "uniform defaults"): periodic_example in every SDK.
+        new QuonfigOptions().ContextUploadMode.Should().Be(ContextUploadMode.PeriodicExample);
+    }
+
     // ---------------------------------------------------------------- T2
 
     [Fact]

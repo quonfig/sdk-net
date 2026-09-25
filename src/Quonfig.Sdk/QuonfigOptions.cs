@@ -195,8 +195,14 @@ public sealed class QuonfigOptions
     /// <summary>Whether to collect per-evaluation summary telemetry. Defaults to <c>true</c>.</summary>
     public bool CollectEvaluationSummaries { get; set; } = true;
 
-    /// <summary>Granularity of context telemetry uploads. Defaults to <see cref="Sdk.ContextUploadMode.ShapesOnly"/>.</summary>
-    public ContextUploadMode ContextUploadMode { get; set; } = ContextUploadMode.ShapesOnly;
+    /// <summary>
+    /// Granularity of context telemetry uploads. Defaults to <see cref="Sdk.ContextUploadMode.PeriodicExample"/>
+    /// (since 1.3.0; was <see cref="Sdk.ContextUploadMode.ShapesOnly"/>): context field names and types,
+    /// plus up to one example context per context key per hour, with its values. Set
+    /// <see cref="Sdk.ContextUploadMode.ShapesOnly"/> to send field names and types only, or
+    /// <see cref="Sdk.ContextUploadMode.None"/> to send no context data.
+    /// </summary>
+    public ContextUploadMode ContextUploadMode { get; set; } = ContextUploadMode.PeriodicExample;
 
     /// <summary>
     /// Optional <see cref="ITelemetrySender"/> for tests / DI. When set, the client uses it instead
