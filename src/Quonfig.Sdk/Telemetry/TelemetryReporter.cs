@@ -114,7 +114,10 @@ public sealed class TelemetryReporter : IAsyncDisposable
             lock (_gate) _currentInterval = _baseInterval;
             return true;
         }
-        catch (Exception e) when (e is not OperationCanceledException)
+        // Only the caller's (shutdown) token ends the loop. A per-request cancellation, e.g.
+        // HttpClient.Timeout surfacing as TaskCanceledException while the caller's token is still
+        // live, is an ordinary failed POST: back off and keep ticking (qfg-y8je.1).
+        catch (Exception e) when (!(e is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             lock (_gate)
             {

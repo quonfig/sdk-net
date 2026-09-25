@@ -1,9 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Quonfig.Sdk.Telemetry;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Telemetry;
@@ -212,5 +216,87 @@ public sealed class TelemetryReporterTests
         sender.Sent.Should().HaveCount(1);
         string json = System.Text.Json.JsonSerializer.Serialize(sender.Sent[0]);
         json.Should().NotContain("failover", "a healthy client must emit no failover event");
+    }
+
+    [Fact]
+    public async Task flush_and_apply_backoff_treats_request_timeout_as_failure_not_shutdown()
+    {
+        // HttpClient.Timeout surfaces as TaskCanceledException while the caller's token is NOT
+        // cancelled. That is a failed POST (back off, keep going), not a shutdown (qfg-y8je.1).
+        var sender = new CapturingSender
+        {
+            OnSend = () => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"),
+        };
+        var (reporter, _, summaries, _, _) = MakeReporter(
+            baseInterval: TimeSpan.FromMilliseconds(100),
+            maxInterval: TimeSpan.FromMinutes(10),
+            sender: sender);
+        await using var r = reporter;
+        summaries.Push(OneStat());
+
+        bool ok = await r.FlushAndApplyBackoffAsync(CancellationToken.None);
+
+        ok.Should().BeFalse();
+        r.CurrentInterval.Should().BeGreaterThan(TimeSpan.FromMilliseconds(100));
+    }
+
+    [Fact]
+    public async Task flush_and_apply_backoff_propagates_cancellation_when_shutdown_token_cancelled()
+    {
+        var shutdown = new CancellationToken(canceled: true);
+        var sender = new CapturingSender
+        {
+            OnSend = () => throw new OperationCanceledException(shutdown),
+        };
+        var (reporter, _, summaries, _, _) = MakeReporter(
+            baseInterval: TimeSpan.FromMilliseconds(100),
+            maxInterval: TimeSpan.FromMinutes(10),
+            sender: sender);
+        await using var r = reporter;
+        summaries.Push(OneStat());
+
+        Func<Task> act = () => r.FlushAndApplyBackoffAsync(shutdown);
+
+        await act.Should().ThrowAsync<OperationCanceledException>();
+        r.CurrentInterval.Should().Be(TimeSpan.FromMilliseconds(100), "shutdown is not a transport failure");
+    }
+
+    [Fact]
+    public async Task loop_keeps_ticking_after_a_timed_out_post()
+    {
+        // Repro for qfg-y8je.1: one slow response (longer than the sender's HttpClient timeout)
+        // used to exit the flush loop for the life of the process.
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath("/api/v1/telemetry/").UsingPost())
+            .InScenario("slow-then-fast")
+            .WillSetStateTo("fast")
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(3)));
+        server.Given(Request.Create().WithPath("/api/v1/telemetry/").UsingPost())
+            .InScenario("slow-then-fast")
+            .WhenStateIs("fast")
+            .RespondWith(Response.Create().WithStatusCode(200));
+
+        using var sender = new HttpTelemetrySender(
+            new Uri(server.Urls[0]), "test-sdk-key", TimeSpan.FromMilliseconds(250), messageHandler: null);
+        var summaries = new EvaluationSummaryCollector(enabled: true);
+        var shapes = new ContextShapeCollector(ContextUploadMode.ShapesOnly);
+        var examples = new ExampleContextCollector(ContextUploadMode.PeriodicExample);
+        await using var reporter = new TelemetryReporter(
+            sender, "instance-hash", summaries, shapes, examples,
+            initialDelay: TimeSpan.Zero, baseInterval: TimeSpan.FromMilliseconds(50),
+            maxInterval: TimeSpan.FromMilliseconds(100));
+
+        summaries.Push(OneStat());
+        reporter.Start();
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (server.LogEntries.Count() < 2 && DateTime.UtcNow < deadline)
+        {
+            summaries.Push(OneStat());
+            await Task.Delay(50);
+        }
+
+        server.LogEntries.Count().Should().BeGreaterThanOrEqualTo(
+            2, "the loop must survive a timed-out POST and keep posting on later ticks");
     }
 }
