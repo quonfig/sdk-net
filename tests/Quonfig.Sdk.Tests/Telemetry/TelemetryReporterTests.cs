@@ -1,20 +1,18 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Quonfig.Sdk.Telemetry;
-using WireMock.RequestBuilders;
-using WireMock.ResponseBuilders;
-using WireMock.Server;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Telemetry;
 
 /// <summary>
-/// Reporter-level coverage: backoff growth on failure, reset on success, empty no-op, and the
-/// final flush on shutdown.
+/// Reporter-level coverage through the public constructor and a custom <see cref="ITelemetrySender"/>:
+/// envelope shape, empty no-op, the deprecated backoff surface, and the final flush on shutdown. The
+/// transport policy itself (retention, floor, Retry-After, caps, logging, T1 = the qfg-y8je.1 timeout
+/// fix) is pinned by <see cref="TelemetryTransportContractTests"/>.
 /// </summary>
 public sealed class TelemetryReporterTests
 {
@@ -73,8 +71,10 @@ public sealed class TelemetryReporterTests
     }
 
     [Fact]
-    public async Task flush_and_apply_backoff_grows_interval_on_sender_failure()
+    public async Task deprecated_flush_and_apply_backoff_reports_failure_and_keeps_the_interval()
     {
+        // Since 1.3.0 (qfg-y8je.10) the interval is fixed: a failure is paced by the 30s resend floor
+        // and Retry-After, and the batch is retained (see TelemetryTransportContractTests).
         var sender = new CapturingSender { OnSend = () => throw new InvalidOperationException("boom") };
         var (reporter, _, summaries, _, _) = MakeReporter(
             baseInterval: TimeSpan.FromMilliseconds(100),
@@ -86,13 +86,19 @@ public sealed class TelemetryReporterTests
         bool ok = await r.FlushAndApplyBackoffAsync(CancellationToken.None);
 
         ok.Should().BeFalse();
-        r.CurrentInterval.Should().BeGreaterThan(TimeSpan.FromMilliseconds(100));
+        r.CurrentInterval.Should().Be(TimeSpan.FromMilliseconds(100));
+        r.RetainedCount.Should().Be(1, "a failed batch is kept for a later resend");
     }
 
     [Fact]
-    public async Task flush_and_apply_backoff_resets_interval_on_success()
+    public async Task flush_treats_request_timeout_as_retryable_failure_not_shutdown()
     {
-        var sender = new CapturingSender { OnSend = () => throw new InvalidOperationException("boom") };
+        // HttpClient.Timeout surfaces as TaskCanceledException while the caller's token is NOT
+        // cancelled. That is a failed POST (retain, keep going), not a shutdown (qfg-y8je.1).
+        var sender = new CapturingSender
+        {
+            OnSend = () => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"),
+        };
         var (reporter, _, summaries, _, _) = MakeReporter(
             baseInterval: TimeSpan.FromMilliseconds(100),
             maxInterval: TimeSpan.FromMinutes(10),
@@ -100,37 +106,11 @@ public sealed class TelemetryReporterTests
         await using var r = reporter;
         summaries.Push(OneStat());
 
-        // First push fails — interval grows
-        await r.FlushAndApplyBackoffAsync(CancellationToken.None);
-        var grown = r.CurrentInterval;
-        grown.Should().BeGreaterThan(TimeSpan.FromMilliseconds(100));
-
-        // Second push: clear the throw and re-push so an envelope is built; should succeed and reset
-        sender.OnSend = null;
-        summaries.Push(OneStat());
         bool ok = await r.FlushAndApplyBackoffAsync(CancellationToken.None);
 
-        ok.Should().BeTrue();
-        r.CurrentInterval.Should().Be(TimeSpan.FromMilliseconds(100));
-    }
-
-    [Fact]
-    public async Task flush_and_apply_backoff_caps_at_max_interval()
-    {
-        var sender = new CapturingSender { OnSend = () => throw new InvalidOperationException("boom") };
-        var (reporter, _, summaries, _, _) = MakeReporter(
-            baseInterval: TimeSpan.FromMilliseconds(100),
-            maxInterval: TimeSpan.FromMilliseconds(300),
-            sender: sender);
-        await using var r = reporter;
-
-        for (int i = 0; i < 20; i++)
-        {
-            summaries.Push(OneStat());
-            await r.FlushAndApplyBackoffAsync(CancellationToken.None);
-        }
-
-        r.CurrentInterval.Should().Be(TimeSpan.FromMilliseconds(300));
+        ok.Should().BeFalse();
+        r.RetainedCount.Should().Be(1);
+        r.TelemetryEnabled.Should().BeTrue();
     }
 
     [Fact]
@@ -219,28 +199,6 @@ public sealed class TelemetryReporterTests
     }
 
     [Fact]
-    public async Task flush_and_apply_backoff_treats_request_timeout_as_failure_not_shutdown()
-    {
-        // HttpClient.Timeout surfaces as TaskCanceledException while the caller's token is NOT
-        // cancelled. That is a failed POST (back off, keep going), not a shutdown (qfg-y8je.1).
-        var sender = new CapturingSender
-        {
-            OnSend = () => throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout"),
-        };
-        var (reporter, _, summaries, _, _) = MakeReporter(
-            baseInterval: TimeSpan.FromMilliseconds(100),
-            maxInterval: TimeSpan.FromMinutes(10),
-            sender: sender);
-        await using var r = reporter;
-        summaries.Push(OneStat());
-
-        bool ok = await r.FlushAndApplyBackoffAsync(CancellationToken.None);
-
-        ok.Should().BeFalse();
-        r.CurrentInterval.Should().BeGreaterThan(TimeSpan.FromMilliseconds(100));
-    }
-
-    [Fact]
     public async Task flush_and_apply_backoff_propagates_cancellation_when_shutdown_token_cancelled()
     {
         var shutdown = new CancellationToken(canceled: true);
@@ -258,45 +216,6 @@ public sealed class TelemetryReporterTests
         Func<Task> act = () => r.FlushAndApplyBackoffAsync(shutdown);
 
         await act.Should().ThrowAsync<OperationCanceledException>();
-        r.CurrentInterval.Should().Be(TimeSpan.FromMilliseconds(100), "shutdown is not a transport failure");
-    }
-
-    [Fact]
-    public async Task loop_keeps_ticking_after_a_timed_out_post()
-    {
-        // Repro for qfg-y8je.1: one slow response (longer than the sender's HttpClient timeout)
-        // used to exit the flush loop for the life of the process.
-        using var server = WireMockServer.Start();
-        server.Given(Request.Create().WithPath("/api/v1/telemetry/").UsingPost())
-            .InScenario("slow-then-fast")
-            .WillSetStateTo("fast")
-            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(3)));
-        server.Given(Request.Create().WithPath("/api/v1/telemetry/").UsingPost())
-            .InScenario("slow-then-fast")
-            .WhenStateIs("fast")
-            .RespondWith(Response.Create().WithStatusCode(200));
-
-        using var sender = new HttpTelemetrySender(
-            new Uri(server.Urls[0]), "test-sdk-key", TimeSpan.FromMilliseconds(250), messageHandler: null);
-        var summaries = new EvaluationSummaryCollector(enabled: true);
-        var shapes = new ContextShapeCollector(ContextUploadMode.ShapesOnly);
-        var examples = new ExampleContextCollector(ContextUploadMode.PeriodicExample);
-        await using var reporter = new TelemetryReporter(
-            sender, "instance-hash", summaries, shapes, examples,
-            initialDelay: TimeSpan.Zero, baseInterval: TimeSpan.FromMilliseconds(50),
-            maxInterval: TimeSpan.FromMilliseconds(100));
-
-        summaries.Push(OneStat());
-        reporter.Start();
-
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (server.LogEntries.Count() < 2 && DateTime.UtcNow < deadline)
-        {
-            summaries.Push(OneStat());
-            await Task.Delay(50);
-        }
-
-        server.LogEntries.Count().Should().BeGreaterThanOrEqualTo(
-            2, "the loop must survive a timed-out POST and keep posting on later ticks");
+        r.RetainedCount.Should().Be(0, "a cancelled flush sends and retains nothing");
     }
 }

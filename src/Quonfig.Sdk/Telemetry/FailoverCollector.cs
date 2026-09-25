@@ -29,12 +29,29 @@ public sealed class FailoverCollector
     // the other SDKs so the field is present on every failover event.
     private long _resolvedFromLkg;
 
+    private volatile bool _disabled;
+
+    /// <summary>Stops counting and clears the window (telemetry disabled for the process, P3).</summary>
+    internal void Disable()
+    {
+        _disabled = true;
+        lock (_gate)
+        {
+            _startMs = null;
+            _hedgeFired = 0;
+            _guardRejected = 0;
+            _resolvedFromPrimary = 0;
+            _resolvedFromSecondary = 0;
+        }
+    }
+
     /// <summary>
     /// Records one config-fetch cycle whose parallel hedge fired its secondary leg (the primary was
     /// slow or errored). Counted once per cycle regardless of which leg's payload won the guard.
     /// </summary>
     public void RecordHedgeFired()
     {
+        if (_disabled) return;
         lock (_gate)
         {
             _startMs ??= NowMs();
@@ -54,6 +71,7 @@ public sealed class FailoverCollector
     /// </summary>
     public void RecordGuardRejected()
     {
+        if (_disabled) return;
         lock (_gate)
         {
             _startMs ??= NowMs();
@@ -68,7 +86,7 @@ public sealed class FailoverCollector
     /// </summary>
     public void RecordResolvedFrom(int sourceIndex)
     {
-        if (sourceIndex < 0)
+        if (sourceIndex < 0 || _disabled)
         {
             return;
         }

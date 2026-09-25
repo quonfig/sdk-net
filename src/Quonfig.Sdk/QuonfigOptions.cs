@@ -205,17 +205,78 @@ public sealed class QuonfigOptions
     /// present, the built-in HTTP sender is used; telemetry is still gated on the eval/context opt-outs
     /// (a full opt-out — <see cref="CollectEvaluationSummaries"/> false AND
     /// <see cref="ContextUploadMode"/> <see cref="Sdk.ContextUploadMode.None"/> — emits nothing).
+    /// A custom sender that throws is treated as a retryable failure (the batch is kept and handed to
+    /// it again later, unchanged).
     /// </summary>
     public ITelemetrySender? TelemetrySender { get; set; }
 
-    /// <summary>Delay before the telemetry reporter's first flush. Defaults to 8s (sdk-java parity).</summary>
+    /// <summary>
+    /// No longer used since 1.3.0: the first telemetry POST happens one <see cref="TelemetryFlushInterval"/>
+    /// after start (and on <see cref="Quonfig.CloseAsync"/>). Kept so existing code compiles.
+    /// </summary>
     public TimeSpan TelemetryInitialDelay { get; set; } = TimeSpan.FromSeconds(8);
 
-    /// <summary>Base interval between telemetry flushes once running. Defaults to 60s.</summary>
+    /// <summary>Interval between telemetry POSTs (one tick). Defaults to 60s. A non-positive value falls back to the default.</summary>
     public TimeSpan TelemetryFlushInterval { get; set; } = TimeSpan.FromSeconds(60);
 
-    /// <summary>Max backoff interval the reporter grows to on repeated send failures. Defaults to 600s.</summary>
+    /// <summary>
+    /// No longer used since 1.3.0: the adaptive backoff it capped was replaced by the transport policy
+    /// (30s resend floor after a failure, <c>Retry-After</c> honored up to 10 min). Kept so existing code compiles.
+    /// </summary>
     public TimeSpan TelemetryMaxInterval { get; set; } = TimeSpan.FromSeconds(600);
+
+    /// <summary>
+    /// Overall deadline for one telemetry POST, connect to response. Defaults to 15s (was 30s). A POST
+    /// that times out is kept and resent later. A non-positive value falls back to the default.
+    /// </summary>
+    public TimeSpan TelemetryTimeout { get; set; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// TCP connect + TLS handshake deadline for telemetry POSTs. Defaults to 5s. Applied on net8.0 when
+    /// the SDK builds its own HTTP handler; on netstandard2.0, or with an injected
+    /// <see cref="HttpMessageHandler"/>, <see cref="TelemetryTimeout"/> bounds connect as well.
+    /// </summary>
+    public TimeSpan TelemetryConnectTimeout { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Maximum number of failed telemetry batches kept for a later resend. Defaults to 5; the oldest is
+    /// dropped beyond it. A non-positive value falls back to the default.
+    /// </summary>
+    public int TelemetryMaxRetainedBatches { get; set; } = 5;
+
+    /// <summary>
+    /// Maximum total size, in bytes, of the failed telemetry batches kept for a later resend. Defaults
+    /// to 2,097,152 (2MB); the oldest is dropped beyond it, and a single batch larger than this is sent
+    /// once and never kept. A non-positive value falls back to the default.
+    /// </summary>
+    public int TelemetryMaxRetainedBytes { get; set; } = 2 * 1024 * 1024;
+
+    /// <summary>
+    /// A failed telemetry batch older than this is discarded instead of resent. Defaults to 5 minutes.
+    /// A non-positive value falls back to the default.
+    /// </summary>
+    public TimeSpan TelemetryMaxRetainedAge { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Maximum distinct evaluation-summary keys (config key and type) per telemetry window. Defaults
+    /// to 10,000. New keys beyond it are not recorded; keys already recorded keep counting.
+    /// </summary>
+    public int TelemetryMaxEvaluationSummaries { get; set; } = 10_000;
+
+    /// <summary>
+    /// Maximum distinct context-shape fields (context name and field name) per telemetry window.
+    /// Defaults to 10,000. New fields beyond it are not recorded.
+    /// </summary>
+    public int TelemetryMaxContextShapeFields { get; set; } = 10_000;
+
+    /// <summary>
+    /// Maximum example contexts per telemetry window (<see cref="Sdk.ContextUploadMode.PeriodicExample"/>).
+    /// Defaults to 10,000. Examples beyond it are not recorded.
+    /// </summary>
+    public int TelemetryMaxExampleContexts { get; set; } = 10_000;
+
+    /// <summary>Test seam: the clock that drives telemetry timers and time checks (contract tests).</summary>
+    internal ITelemetryClock? TelemetryClock { get; set; }
 
     /// <summary>
     /// When set, <see cref="Quonfig.ShouldLog"/> evaluates this single config (with the logger

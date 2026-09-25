@@ -154,6 +154,9 @@ public sealed class Quonfig : IQuonfig
         Justification = "TelemetryReporter is flushed and disposed via CloseAsync (DisposeAsync -> CloseAsync).")]
     private readonly TelemetryReporter? _telemetryReporter;
 
+    /// <summary>The built-in HTTP telemetry sender, when the client created it (disposed on close).</summary>
+    private readonly HttpTelemetrySender? _ownedTelemetrySender;
+
     /// <summary>Constructs a client. <see cref="InitAsync"/> must be awaited before sync getters are reliable.</summary>
     public Quonfig(QuonfigOptions options)
     {
@@ -210,9 +213,18 @@ public sealed class Quonfig : IQuonfig
         var telemetrySender = telemetryEnabled ? ResolveTelemetrySender(options, _telemetryUrl) : null;
         if (telemetrySender is not null)
         {
-            _summaries = new EvaluationSummaryCollector(options.CollectEvaluationSummaries);
-            _shapes = new ContextShapeCollector(options.ContextUploadMode);
-            _examples = new ExampleContextCollector(options.ContextUploadMode);
+            _ownedTelemetrySender = options.TelemetrySender is null ? telemetrySender as HttpTelemetrySender : null;
+            // Aggregator caps (P6): a non-positive option falls back to the 10,000 default.
+            _summaries = new EvaluationSummaryCollector(
+                options.CollectEvaluationSummaries,
+                TelemetryDefaults.PositiveOr(options.TelemetryMaxEvaluationSummaries, TelemetryDefaults.MaxEvaluationSummaries));
+            _shapes = new ContextShapeCollector(
+                options.ContextUploadMode,
+                TelemetryDefaults.PositiveOr(options.TelemetryMaxContextShapeFields, TelemetryDefaults.MaxContextShapeFields));
+            _examples = new ExampleContextCollector(
+                options.ContextUploadMode,
+                TelemetryDefaults.PositiveOr(options.TelemetryMaxExampleContexts, TelemetryDefaults.MaxExampleContexts),
+                TimeSpan.FromHours(1));
             _failover = new FailoverCollector();
             _telemetryReporter = new TelemetryReporter(
                 telemetrySender,
@@ -220,11 +232,10 @@ public sealed class Quonfig : IQuonfig
                 _summaries,
                 _shapes,
                 _examples,
-                options.TelemetryInitialDelay,
-                options.TelemetryFlushInterval,
-                options.TelemetryMaxInterval,
+                _failover,
                 _logger,
-                _failover);
+                TelemetryReporterSettings.From(options),
+                options.TelemetryClock);
             _telemetryReporter.Start();
         }
 
@@ -346,14 +357,15 @@ public sealed class Quonfig : IQuonfig
         _httpTransport?.Dispose();
         _sseCts?.Dispose();
 
-        // Stop the telemetry reporter last: DisposeAsync attempts one final synchronous flush of any
-        // pending events (eval summaries, context shapes, failover counters) before tearing down its
-        // background loop. (qfg-gxm6)
+        // Stop the telemetry reporter last: DisposeAsync gives the live window (eval summaries, context
+        // shapes, failover counters) one POST with a 5s deadline and never drains the retained queue,
+        // so close never blocks on a slow telemetry endpoint. (qfg-gxm6, qfg-y8je.10)
         var reporter = _telemetryReporter;
         if (reporter is not null)
         {
             await reporter.DisposeAsync().ConfigureAwait(false);
         }
+        _ownedTelemetrySender?.Dispose();
     }
 
     /// <inheritdoc/>
@@ -549,20 +561,22 @@ public sealed class Quonfig : IQuonfig
     /// SDK key and no injected sender (datadir/datafile mode), so no reporter is built. Mirrors
     /// sdk-java's <c>resolveTelemetrySender</c>.
     /// </summary>
-    private static ITelemetrySender? ResolveTelemetrySender(QuonfigOptions opts, string telemetryUrl)
+    private static ITelemetryTransport? ResolveTelemetrySender(QuonfigOptions opts, string telemetryUrl)
     {
         if (opts.TelemetrySender is not null)
         {
-            return opts.TelemetrySender;
+            return opts.TelemetrySender as ITelemetryTransport ?? new TelemetrySenderTransport(opts.TelemetrySender);
         }
         if (string.IsNullOrEmpty(opts.SdkKey))
         {
             return null;
         }
+        var settings = TelemetryReporterSettings.From(opts);
         return new HttpTelemetrySender(
             new Uri(telemetryUrl, UriKind.Absolute),
             opts.SdkKey!,
-            HttpTelemetrySender.DefaultTimeout,
+            settings.Timeout,
+            settings.ConnectTimeout,
             opts.HttpMessageHandler);
     }
 
@@ -1259,6 +1273,18 @@ public sealed class Quonfig : IQuonfig
     /// prove the failover call sites fired. (qfg-41nh.18)
     /// </summary>
     internal FailoverCollector? Failover => _failover;
+
+    /// <summary>Test/diagnostic: the telemetry reporter, or <c>null</c> when no telemetry runs (qfg-y8je.10).</summary>
+    internal TelemetryReporter? TelemetryReporter => _telemetryReporter;
+
+    /// <summary>Test/diagnostic: the evaluation-summary collector, or <c>null</c> when no telemetry runs.</summary>
+    internal EvaluationSummaryCollector? EvaluationSummaries => _summaries;
+
+    /// <summary>Test/diagnostic: the context-shape collector, or <c>null</c> when no telemetry runs.</summary>
+    internal ContextShapeCollector? ContextShapes => _shapes;
+
+    /// <summary>Test/diagnostic: the example-context collector, or <c>null</c> when no telemetry runs.</summary>
+    internal ExampleContextCollector? ExampleContexts => _examples;
 
     /// <summary>Test/diagnostic: the effective api URLs after <c>QUONFIG_DOMAIN</c> + explicit-override resolution.</summary>
     internal IReadOnlyList<string> ResolvedApiUrls => _apiUrls;

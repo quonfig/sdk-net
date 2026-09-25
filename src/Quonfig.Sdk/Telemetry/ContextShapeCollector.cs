@@ -17,15 +17,20 @@ public sealed class ContextShapeCollector
     internal const int FieldTypeBool = 5;
     internal const int FieldTypeArray = 10;
 
-    private readonly bool _enabled;
     private readonly int _maxDataSize;
     private readonly object _gate = new();
     private readonly Dictionary<string, Dictionary<string, int>> _shapes = new();
+    private volatile bool _enabled;
+    private int _fieldCount;
 
-    /// <summary>Initializes a collector with a default 10,000-row cap.</summary>
+    /// <summary>Initializes a collector with a default 10,000-field cap.</summary>
     public ContextShapeCollector(ContextUploadMode mode) : this(mode, 10_000) { }
 
-    /// <summary>Initializes a collector with the supplied cap on named-context rows.</summary>
+    /// <summary>
+    /// Initializes a collector with the supplied cap on distinct <c>(contextName, fieldName)</c> pairs
+    /// per window (before 1.3.0 only context names were capped, so fields grew with traffic). Pairs
+    /// beyond the cap are not recorded; pairs already recorded are unaffected.
+    /// </summary>
     public ContextShapeCollector(ContextUploadMode mode, int maxDataSize)
     {
         _enabled = mode != ContextUploadMode.None;
@@ -34,6 +39,20 @@ public sealed class ContextShapeCollector
 
     /// <summary>True when this collector accepts pushes (any mode other than <see cref="ContextUploadMode.None"/>).</summary>
     public bool IsEnabled => _enabled;
+
+    /// <summary>Cap on distinct <c>(contextName, fieldName)</c> pairs per window.</summary>
+    internal int MaxDataSize => _maxDataSize;
+
+    /// <summary>Stops collecting and clears pending data (telemetry disabled for the process, P3).</summary>
+    internal void Disable()
+    {
+        _enabled = false;
+        lock (_gate)
+        {
+            _shapes.Clear();
+            _fieldCount = 0;
+        }
+    }
 
     /// <summary>Records the property-name shape of every named context in <paramref name="contexts"/>.</summary>
     public void Push(ContextSet? contexts)
@@ -44,18 +63,18 @@ public sealed class ContextShapeCollector
             foreach (var named in contexts)
             {
                 string name = named.Key;
-                if (!_shapes.TryGetValue(name, out var shape))
-                {
-                    if (_shapes.Count >= _maxDataSize) continue;
-                    shape = new Dictionary<string, int>();
-                    _shapes[name] = shape;
-                }
+                _shapes.TryGetValue(name, out var shape);
                 foreach (var prop in named.Value)
                 {
-                    if (!shape.ContainsKey(prop.Key))
+                    if (shape is not null && shape.ContainsKey(prop.Key)) continue;
+                    if (_fieldCount >= _maxDataSize) break;
+                    if (shape is null)
                     {
-                        shape[prop.Key] = FieldTypeForValue(prop.Value);
+                        shape = new Dictionary<string, int>();
+                        _shapes[name] = shape;
                     }
+                    shape[prop.Key] = FieldTypeForValue(prop.Value);
+                    _fieldCount++;
                 }
             }
         }
@@ -90,6 +109,7 @@ public sealed class ContextShapeCollector
             var ev = new Dictionary<string, object?> { ["contextShapes"] = envelope };
 
             _shapes.Clear();
+            _fieldCount = 0;
             return ev;
         }
     }

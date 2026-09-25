@@ -14,8 +14,8 @@ namespace Quonfig.Sdk.Telemetry;
 /// </summary>
 public sealed class EvaluationSummaryCollector
 {
-    private readonly bool _enabled;
     private readonly int _maxDataSize;
+    private volatile bool _enabled;
     private readonly object _gate = new();
     private readonly Dictionary<SummaryKey, Dictionary<CounterKey, CounterCell>> _data = new();
     private long? _startAtMs;
@@ -32,6 +32,20 @@ public sealed class EvaluationSummaryCollector
 
     /// <summary>True when this collector accepts pushes; false when constructed with <c>enabled=false</c>.</summary>
     public bool IsEnabled => _enabled;
+
+    /// <summary>Cap on distinct <c>(key,type)</c> rows per window; existing rows keep counting at the cap.</summary>
+    internal int MaxDataSize => _maxDataSize;
+
+    /// <summary>Stops collecting and clears pending data (telemetry disabled for the process, P3).</summary>
+    internal void Disable()
+    {
+        _enabled = false;
+        lock (_gate)
+        {
+            _data.Clear();
+            _startAtMs = null;
+        }
+    }
 
     /// <summary>Records one evaluation observation. No-op when disabled or when <paramref name="stat"/> is null / has no value.</summary>
     public void Push(EvaluationStat? stat)

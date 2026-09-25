@@ -14,13 +14,13 @@ public sealed class ExampleContextCollector
 {
     private static readonly TimeSpan DefaultRateLimit = TimeSpan.FromHours(1);
 
-    private readonly bool _enabled;
     private readonly int _maxDataSize;
     private readonly long _rateLimitMs;
     private readonly object _gate = new();
     private readonly List<long> _timestamps = new();
     private readonly List<ContextSet> _data = new();
     private readonly Dictionary<string, long> _seen = new(StringComparer.Ordinal);
+    private volatile bool _enabled;
 
     /// <summary>Initializes a collector with the default 1h rate-limit and 10,000-row cap.</summary>
     public ExampleContextCollector(ContextUploadMode mode) : this(mode, 10_000, DefaultRateLimit) { }
@@ -36,6 +36,21 @@ public sealed class ExampleContextCollector
     /// <summary>True iff the collector was constructed with <see cref="ContextUploadMode.PeriodicExample"/>.</summary>
     public bool IsEnabled => _enabled;
 
+    /// <summary>Cap on example contexts per window.</summary>
+    internal int MaxDataSize => _maxDataSize;
+
+    /// <summary>Stops collecting and clears pending data (telemetry disabled for the process, P3).</summary>
+    internal void Disable()
+    {
+        _enabled = false;
+        lock (_gate)
+        {
+            _data.Clear();
+            _timestamps.Clear();
+            _seen.Clear();
+        }
+    }
+
     /// <summary>Records one full context example (subject to rate-limit and size cap).</summary>
     public void Push(ContextSet? contexts)
     {
@@ -49,6 +64,12 @@ public sealed class ExampleContextCollector
         {
             if (_data.Count >= _maxDataSize) return;
             if (_seen.TryGetValue(key, out long lastSeen) && (now - lastSeen) < _rateLimitMs) return;
+            if (!_seen.ContainsKey(key) && _seen.Count >= TelemetryDefaults.ExampleContextSeenCap)
+            {
+                // Bound the rate-limit map (P6): prune expired keys; if still full, drop this example.
+                PruneCache();
+                if (_seen.Count >= TelemetryDefaults.ExampleContextSeenCap) return;
+            }
 
             _timestamps.Add(now);
             _data.Add(contexts);
