@@ -29,7 +29,7 @@ public sealed class HttpTransportTests
         return "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
     }
 
-    private static string ExpectedVersion() => "dotnet/" + SdkInfo.Version;
+    private static string ExpectedVersion() => "dotnet/" + SdkInfoTests.AssemblyVersion();
 
     private static string EnvelopeJson(string env = "production")
     {

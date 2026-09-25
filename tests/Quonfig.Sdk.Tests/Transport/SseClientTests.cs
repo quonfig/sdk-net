@@ -252,7 +252,7 @@ public sealed class SseClientTests
             Convert.ToBase64String(Encoding.UTF8.GetBytes("1:" + SdkKey));
         log.RequestMessage.Headers!["Authorization"].ToString().Should().Be(expectedAuth);
         log.RequestMessage.Headers!["X-Quonfig-SDK-Version"].ToString()
-            .Should().Be("dotnet/" + SdkInfo.Version);
+            .Should().Be("dotnet/" + SdkInfoTests.AssemblyVersion());
         log.RequestMessage.Headers!["Accept"].ToString().Should().Contain("text/event-stream");
         // Path is /api/v2/sse/config — the constant the bead pins.
         log.RequestMessage.Path.Should().Be("/api/v2/sse/config");
