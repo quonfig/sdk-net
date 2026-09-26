@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Quonfig.Sdk;
+using Quonfig.Sdk.Exceptions;
 using Quonfig.Sdk.Transport;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -245,6 +246,57 @@ public sealed class HttpTransportTests
         transport.LastResolvedIndex.Should().Be(-1, "no fetch has resolved yet");
         await transport.FetchAsync(null, CancellationToken.None);
         transport.LastResolvedIndex.Should().Be(0, "the primary (index 0) served the fetch");
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"error\":\"x\"}")]
+    public async Task FetchAsync_NonEnvelope200_FailsOverAndDoesNotStoreETag(string junk)
+    {
+        // qfg-9dxb.3 Fix B: a 200 that is not a config envelope (no meta.version) is a leg error, so
+        // the next URL is tried, and its ETag is never stored (it would otherwise pin itself via 304s).
+        using var primary = WireMockServer.Start();
+        using var secondary = WireMockServer.Start();
+        primary
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"junk\"")
+                .WithBody(junk));
+        secondary
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(EnvelopeJson()));
+
+        using var transport = new HttpTransport(
+            new[] { new Uri(primary.Urls[0]), new Uri(secondary.Urls[0]) }, SdkKey);
+
+        var envelope = await transport.FetchAsync(null, CancellationToken.None);
+
+        envelope.Should().NotBeNull();
+        envelope!.Meta!.Version.Should().Be("v1");
+        transport.LastResolvedIndex.Should().Be(1, "the junk primary 200 is a leg error");
+        transport.LastETag.Should().NotBe("\"junk\"", "an ETag is stored only after the body validates");
+    }
+
+    [Fact]
+    public async Task FetchAsync_NonEnvelope200_OnOnlyUrl_Throws()
+    {
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"junk\"")
+                .WithBody("{}"));
+
+        using var transport = new HttpTransport(new[] { new Uri(server.Urls[0]) }, SdkKey);
+
+        Func<Task> act = () => transport.FetchAsync(null, CancellationToken.None);
+
+        await act.Should().ThrowAsync<QuonfigException>();
+        transport.LastETag.Should().BeNull("a rejected body's ETag must not be stored");
     }
 
     [Fact]

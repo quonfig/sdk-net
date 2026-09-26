@@ -77,6 +77,31 @@ public sealed class SseClientTests
     }
 
     [Fact]
+    public async Task ParseStreamAsync_DropsNonEnvelopeEvents()
+    {
+        // qfg-9dxb.3 Fix B: an SSE event whose JSON is not a config envelope (no meta object with a
+        // non-empty version) is dropped exactly like malformed JSON; valid envelopes around it still
+        // flow through.
+        var received = new ConcurrentQueue<ConfigEnvelope>();
+        var body = new StringBuilder();
+        body.Append("data: {}\n\n");
+        body.Append("data: {\"error\":\"x\"}\n\n");
+        body.Append("data: {\"meta\":{\"version\":\"\",\"environment\":\"production\"},\"configs\":[]}\n\n");
+        body.Append("data: ").Append(MinimalEnvelopeJson("v1")).Append("\n\n");
+        body.Append("data: {\"meta\":null,\"configs\":[]}\n\n");
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(body.ToString()));
+
+        await SseClient.ParseStreamAsync(
+            stream,
+            env => received.Enqueue(env),
+            readTimeout: TimeSpan.FromSeconds(5),
+            cancellationToken: CancellationToken.None);
+
+        received.Select(e => e.Meta!.Version).Should().Equal(new[] { "v1" },
+            "only the real envelope is delivered; non-envelopes are dropped");
+    }
+
+    [Fact]
     public async Task ParseStreamAsync_WatchdogFiresOnStallAndDisposesStream()
     {
         using var stalling = new StallingStream();

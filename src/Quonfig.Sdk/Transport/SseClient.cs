@@ -525,6 +525,13 @@ public sealed class SseClient : IDisposable
             return;
         }
         if (envelope is null) return;
+        if (!envelope.IsWellFormed())
+        {
+            // Valid JSON but not a config envelope (no meta.version) — drop it exactly like
+            // malformed JSON; installing it would wipe every key (qfg-9dxb.3).
+            logger.LogWarning("SSE: discarding event that is not a config envelope (missing meta.version)");
+            return;
+        }
         try
         {
             onEnvelope(envelope);

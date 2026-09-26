@@ -232,11 +232,6 @@ public sealed class HttpTransport : IDisposable
                 }
                 if (sc >= 200 && sc < 300)
                 {
-                    string? responseETag = response.Headers.ETag?.Tag;
-                    if (responseETag is not null)
-                    {
-                        LastETag = responseETag;
-                    }
 #if NET8_0_OR_GREATER
                     using var bodyStream = await response.Content.ReadAsStreamAsync(attemptToken).ConfigureAwait(false);
 #else
@@ -245,9 +240,19 @@ public sealed class HttpTransport : IDisposable
                     var envelope = await JsonSerializer
                         .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: attemptToken)
                         .ConfigureAwait(false);
-                    if (envelope is null)
+                    if (envelope is null || !envelope.IsWellFormed())
                     {
-                        throw new QuonfigException($"api-delivery at {target} returned an empty/null envelope body");
+                        // Not a config envelope (null, {}, {"error":..}): a leg error so the next URL
+                        // is tried, and its ETag is never stored (qfg-9dxb.3).
+                        lastError = new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)");
+                        continue;
+                    }
+                    // Store the ETag only AFTER the body validated, so a junk 200 can't pin itself
+                    // as "current" through later 304s.
+                    string? responseETag = response.Headers.ETag?.Tag;
+                    if (responseETag is not null)
+                    {
+                        LastETag = responseETag;
                     }
                     LastResolvedIndex = i;
                     return envelope;
@@ -432,11 +437,6 @@ public sealed class HttpTransport : IDisposable
             }
             if (sc >= 200 && sc < 300)
             {
-                string? responseETag = response.Headers.ETag?.Tag;
-                if (responseETag is not null)
-                {
-                    lock (_etagLock) { _etags[legIndex] = responseETag; }
-                }
 #if NET8_0_OR_GREATER
                 using var bodyStream = await response.Content.ReadAsStreamAsync(attemptToken).ConfigureAwait(false);
 #else
@@ -445,9 +445,18 @@ public sealed class HttpTransport : IDisposable
                 var envelope = await JsonSerializer
                     .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: attemptToken)
                     .ConfigureAwait(false);
-                if (envelope is null)
+                if (envelope is null || !envelope.IsWellFormed())
                 {
-                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {target} returned an empty/null envelope body"));
+                    // Not a config envelope (null, {}, {"error":..}): a leg error so the hedge fires
+                    // the secondary and nothing is installed; the ETag is never stored (qfg-9dxb.3).
+                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)"));
+                }
+                // Store the ETag only AFTER the body validated, so a junk 200 can't pin itself as
+                // "current" through later 304s.
+                string? responseETag = response.Headers.ETag?.Tag;
+                if (responseETag is not null)
+                {
+                    lock (_etagLock) { _etags[legIndex] = responseETag; }
                 }
                 return LegResult.Ok(legIndex, envelope);
             }

@@ -46,4 +46,14 @@ public sealed class ConfigEnvelope
         }
         Meta = meta;
     }
+
+    /// <summary>
+    /// True when this decoded body is actually a config envelope: it carries a <c>meta</c> object
+    /// with a non-empty <c>version</c>. api-delivery and <c>qfg serve</c> always send both
+    /// <c>version</c> and <c>environment</c>, so a body without them (<c>{}</c>, <c>{"error":"x"}</c>
+    /// from a misbehaving proxy/WAF) is not config and must never be installed: installing it would
+    /// wipe every key on an established client (qfg-9dxb.3 Fix B). Network decode sites (HTTP legs,
+    /// SSE events) treat a failed check as a leg error / dropped event.
+    /// </summary>
+    internal bool IsWellFormed() => Meta is not null && !string.IsNullOrEmpty(Meta.Version);
 }
