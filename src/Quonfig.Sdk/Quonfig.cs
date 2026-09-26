@@ -1193,7 +1193,11 @@ public sealed class Quonfig : IQuonfig
                     : NetworkInstallOutcome.RejectedOlder;
             }
             InstallEnvelope(envelope);
-            _heldGeneration = incoming;
+            // An unversioned install (incoming <= 0) carries no ordering info: it installs (the
+            // carve-out above) but must never LOWER a positive held watermark, or a later older
+            // positive snapshot could move the client backward (qfg-9dxb.3 Fix A). Math.Max still
+            // lifts a fresh client's -1 sentinel to 0 on an unversioned first install.
+            _heldGeneration = incoming > 0 ? incoming : Math.Max(_heldGeneration, incoming);
             _networkInstallCount++;
             if (sourceIndex >= 0)
             {

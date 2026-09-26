@@ -259,7 +259,8 @@ public sealed class QuonfigGuardRejectedCountingTests
         Serve(server, generation: 0, sseBody: SseHeartbeatOnly);
         await client.RefreshAsync();
 
-        client.HeldGeneration.Should().Be(0, "gen<=0 carve-out: an unversioned snapshot installs, not freezes");
+        client.HeldGeneration.Should().Be(42,
+            "gen<=0 carve-out installs, but never lowers the positive held generation (qfg-9dxb.3 Fix A)");
         client.NetworkInstallCount.Should().Be(2, "the carve-out install advances the count");
 
         GuardRejected(client).Should().Be(0L,

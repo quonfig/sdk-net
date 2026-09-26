@@ -86,8 +86,16 @@ public sealed class QuonfigRejectOlderTests
         ServeGeneration(server, 0);
         await client.RefreshAsync();
 
-        client.HeldGeneration.Should().Be(0, "gen-0 carve-out: an unversioned snapshot must install, not freeze");
-        client.NetworkInstallCount.Should().Be(2, "the carve-out install advances the count");
+        client.NetworkInstallCount.Should().Be(2, "gen-0 carve-out: an unversioned snapshot must install, not freeze");
+        // qfg-9dxb.3 Fix A: the install happens, but it carries no ordering info, so it must never
+        // lower the positive held watermark (the client must never go backward).
+        client.HeldGeneration.Should().Be(42, "an unversioned install keeps the prior max generation");
+
+        // Consequently an older positive snapshot is still rejected after the carve-out install.
+        ServeGeneration(server, 41);
+        await client.RefreshAsync();
+        client.HeldGeneration.Should().Be(42);
+        client.NetworkInstallCount.Should().Be(2, "the older 41 is still rejected after the carve-out");
     }
 
     [Fact]
