@@ -69,33 +69,99 @@ public sealed class QuonfigRejectOlderTests
         client.NetworkInstallCount.Should().Be(1, "the rejected-older payload was not installed");
     }
 
+    private static string MarkerEnvelopeJson(int generation, string marker) =>
+        "{\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":" + generation + "}," +
+        "\"configs\":[{\"id\":\"c-marker\",\"key\":\"marker\",\"type\":\"config\",\"valueType\":\"string\"," +
+        "\"default\":{\"rules\":[{\"criteria\":[],\"value\":{\"type\":\"string\",\"value\":\"" + marker + "\"}}]}}]}";
+
+    private static void ServeMarker(WireMockServer server, int generation, string marker)
+    {
+        server.Reset();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithBody(MarkerEnvelopeJson(generation, marker)));
+    }
+
+    /// <summary>
+    /// qfg-9dxb.9: an unversioned (generation &lt;= 0) payload must NOT install over a held positive
+    /// generation. Gen 0 today only comes from a server whose git object store is damaged (rev-count
+    /// failed) — the least trustworthy source — so installing it would move the client backward to
+    /// OLD content, and (since the held generation is not lowered, qfg-9dxb.3) the healthy gen-N
+    /// re-delivery would then be rejected as same-generation, sticking the client on OLD.
+    /// </summary>
     [Fact]
-    public async Task EstablishedClient_InstallsUnversionedSnapshot_CarveOut()
+    public async Task EstablishedClient_RejectsUnversionedSnapshot_OverHeldPositiveGeneration()
     {
         using var server = WireMockServer.Start();
-        ServeGeneration(server, 42);
+        ServeMarker(server, 42, "NEW");
 
         await using var client = NewClient(server);
         await client.InitAsync();
 
         client.HeldGeneration.Should().Be(42, "the initial fetch established generation 42");
+        client.GetString("marker").Should().Be("NEW");
 
-        // Server now serves an UNVERSIONED (generation 0) snapshot — a server that predates the
-        // watermark, or one whose rev-count failed. It carries no ordering information, so the
-        // carve-out must install it rather than freeze the established client on 42.
-        ServeGeneration(server, 0);
+        // A damaged-store server answers with generation 0 and OLD content.
+        ServeMarker(server, 0, "OLD");
         await client.RefreshAsync();
 
-        client.NetworkInstallCount.Should().Be(2, "gen-0 carve-out: an unversioned snapshot must install, not freeze");
-        // qfg-9dxb.3 Fix A: the install happens, but it carries no ordering info, so it must never
-        // lower the positive held watermark (the client must never go backward).
-        client.HeldGeneration.Should().Be(42, "an unversioned install keeps the prior max generation");
-
-        // Consequently an older positive snapshot is still rejected after the carve-out install.
-        ServeGeneration(server, 41);
-        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("NEW", "a gen-0 payload must not install over held generation 42");
         client.HeldGeneration.Should().Be(42);
-        client.NetworkInstallCount.Should().Be(2, "the older 41 is still rejected after the carve-out");
+        client.NetworkInstallCount.Should().Be(1, "the gen-0 payload was not installed");
+
+        // The healthy server re-delivers generation 42 — the client still holds NEW.
+        ServeMarker(server, 42, "NEW");
+        await client.RefreshAsync();
+
+        client.GetString("marker").Should().Be("NEW", "the client never went backward, so gen-42 re-delivery leaves NEW in place");
+        client.HeldGeneration.Should().Be(42);
+
+        // And an older positive snapshot is still rejected.
+        ServeMarker(server, 41, "OLDER");
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("NEW");
+        client.NetworkInstallCount.Should().Be(1);
+    }
+
+    /// <summary>
+    /// qfg-9dxb.9: a client that has only ever seen generation 0 (held == 0, never a real generation)
+    /// keeps installing each gen-0 payload, so it never freezes on stale config.
+    /// </summary>
+    [Fact]
+    public async Task GenZeroOnlyClient_KeepsInstallingEachGenZeroPayload()
+    {
+        using var server = WireMockServer.Start();
+        ServeMarker(server, 0, "A");
+
+        await using var client = NewClient(server);
+        await client.InitAsync();
+
+        client.GetString("marker").Should().Be("A");
+        client.HeldGeneration.Should().Be(0);
+
+        ServeMarker(server, 0, "B");
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("B", "held generation is 0, so a gen-0 payload installs");
+
+        ServeMarker(server, 0, "C");
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("C");
+
+        client.HeldGeneration.Should().Be(0);
+        client.NetworkInstallCount.Should().Be(3, "every gen-0 payload installed while no real generation was ever held");
+
+        // Once a real generation arrives it is held, and gen 0 no longer overrides it.
+        ServeMarker(server, 5, "REAL");
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("REAL");
+        client.HeldGeneration.Should().Be(5);
+
+        ServeMarker(server, 0, "D");
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("REAL", "gen 0 must not override a held real generation");
+        client.NetworkInstallCount.Should().Be(4);
     }
 
     [Fact]

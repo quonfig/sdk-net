@@ -118,7 +118,8 @@ public sealed class Quonfig : IQuonfig
     /// <summary>
     /// The <c>Meta.generation</c> currently held — the watermark the reject-older guard compares
     /// against. <c>-1</c> means nothing has been installed from the network yet (a fresh client
-    /// always accepts its first snapshot, even at generation 0).
+    /// always accepts its first snapshot, even at generation 0). <c>0</c> means only unversioned
+    /// payloads have been installed, so further gen-0 payloads still install (qfg-9dxb.9).
     /// </summary>
     private int _heldGeneration = -1;
 
@@ -896,6 +897,8 @@ public sealed class Quonfig : IQuonfig
                 // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the
                 // fallback poller's engage-time fetch). Nothing to install and nothing wrong — a silent
                 // no-op, deliberately NOT counted as guardRejected (qfg-rr5b).
+                // NetworkInstallOutcome.RejectedUnversioned: a gen<=0 payload while a real generation
+                // is held — not installed, but not provably older, so also a silent no-op (qfg-9dxb.9).
             }
         }
 
@@ -1139,7 +1142,9 @@ public sealed class Quonfig : IQuonfig
             // the CURRENT envelope on every connect (SDK clients send no Last-Event-Id), so every SSE
             // reconnect re-delivers config this client already holds. Nothing to install and nothing
             // wrong — a silent no-op, deliberately NOT counted as guardRejected, and (as before) not
-            // stamped either (qfg-rr5b).
+            // stamped either (qfg-rr5b). NetworkInstallOutcome.RejectedUnversioned (gen<=0 while a
+            // real generation is held) is handled the same way: dropped, not counted, not stamped
+            // (qfg-9dxb.9).
             // Receiving an envelope means the SSE stream is live; update connection state and
             // tell the fallback poller it can stand down.
             _fallbackPoller?.SetSseConnected(true);
@@ -1158,7 +1163,12 @@ public sealed class Quonfig : IQuonfig
     /// <list type="bullet">
     ///   <item><description>A fresh client (nothing installed yet) always accepts the first snapshot,
     ///     even at generation 0. A stale secondary can therefore seed a fresh client, but…</description></item>
-    ///   <item><description>…an established client installs only if the incoming <c>Meta.generation</c>
+    ///   <item><description>…an UNVERSIONED payload (incoming <c>Meta.generation</c> &lt;= 0) installs
+    ///     only while the held generation is 0, i.e. the client has never held a real generation.
+    ///     Pre-watermark servers that sent generation 0 on every payload are long gone; today gen 0
+    ///     only comes from a server whose git object store is damaged (rev-count failed), so it must
+    ///     never override a held real generation (qfg-9dxb.9).</description></item>
+    ///   <item><description>Otherwise an established client installs only if the incoming generation
     ///     is strictly greater than the held generation. An older payload is dropped, so a late
     ///     failover to a stale secondary can never move the client backward; a later, newer primary
     ///     win heals forward.</description></item>
@@ -1171,32 +1181,45 @@ public sealed class Quonfig : IQuonfig
     /// <para>The two rejection shapes are reported separately (<see cref="NetworkInstallOutcome"/>)
     /// because they mean different things to failover telemetry: only a STRICTLY older payload is a
     /// leg trying to move the client backwards (<c>guardRejected</c>), while an equal-generation
-    /// re-delivery is ordinary steady-state traffic (qfg-rr5b). The INSTALL decision is identical for
-    /// both — neither is installed.</para>
+    /// re-delivery is ordinary steady-state traffic (qfg-rr5b). A rejected unversioned payload is
+    /// likewise not provably older (it carries no ordering info), so it is a silent no-op too
+    /// (qfg-9dxb.9). The INSTALL decision is identical for all three — none is installed.</para>
     /// </summary>
     private NetworkInstallOutcome InstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
     {
         lock (_installLock)
         {
             int incoming = envelope.Meta?.Generation ?? 0;
-            // Established client: reject anything that doesn't strictly advance the watermark
-            // (older = regression, equal = redundant no-op). A fresh client (_networkInstallCount
-            // == 0) always installs, even at generation 0. An UNVERSIONED snapshot (incoming <= 0 —
-            // a server that predates the watermark, or one whose rev-count failed) carries no
-            // ordering info, so it is never rejected as "older"; freezing the client on stale
-            // config would be worse (mirrors sdk-node's carve-out). Because of that carve-out a
-            // rejection always has incoming > 0, so equal-vs-older is a clean split.
-            if (_networkInstallCount > 0 && incoming > 0 && incoming <= _heldGeneration)
+            // Canonical rule (mirrors sdk-go shouldInstall, qfg-9dxb.9):
+            //   first install (_networkInstallCount == 0) -> install, even at generation 0
+            //   incoming <= 0 (unversioned)              -> install ONLY if held == 0 (the client
+            //                                               has never held a real generation)
+            //   otherwise                                -> install iff incoming > held
+            // Pre-watermark servers that sent generation 0 on every payload are long dead. Gen 0
+            // now only comes from a server whose git object store is damaged (rev-count failed) —
+            // the least trustworthy source — so it must never override a held real generation.
+            // Such a rejection is NOT provably older (no ordering info), so it is a silent no-op,
+            // never counted as guardRejected.
+            if (_networkInstallCount > 0)
             {
-                return incoming == _heldGeneration
-                    ? NetworkInstallOutcome.RejectedSameGeneration
-                    : NetworkInstallOutcome.RejectedOlder;
+                if (incoming <= 0)
+                {
+                    if (_heldGeneration > 0)
+                    {
+                        return NetworkInstallOutcome.RejectedUnversioned;
+                    }
+                }
+                else if (incoming <= _heldGeneration)
+                {
+                    return incoming == _heldGeneration
+                        ? NetworkInstallOutcome.RejectedSameGeneration
+                        : NetworkInstallOutcome.RejectedOlder;
+                }
             }
             InstallEnvelope(envelope);
-            // An unversioned install (incoming <= 0) carries no ordering info: it installs (the
-            // carve-out above) but must never LOWER a positive held watermark, or a later older
-            // positive snapshot could move the client backward (qfg-9dxb.3 Fix A). Math.Max still
-            // lifts a fresh client's -1 sentinel to 0 on an unversioned first install.
+            // An unversioned install (incoming <= 0, only reachable while held <= 0) must never
+            // LOWER the held watermark (qfg-9dxb.3 Fix A); Math.Max lifts a fresh client's -1
+            // sentinel to 0 on an unversioned first install.
             _heldGeneration = incoming > 0 ? incoming : Math.Max(_heldGeneration, incoming);
             _networkInstallCount++;
             if (sourceIndex >= 0)
@@ -1213,7 +1236,7 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     private enum NetworkInstallOutcome
     {
-        /// <summary>The envelope advanced the watermark (or hit the fresh-client / unversioned carve-out) and was installed.</summary>
+        /// <summary>The envelope advanced the watermark (or was a fresh client's first install, or an unversioned payload while held == 0) and was installed.</summary>
         Installed,
 
         /// <summary>
@@ -1228,6 +1251,14 @@ public sealed class Quonfig : IQuonfig
         /// this client backwards. This is the only shape counted as <c>guardRejected</c>.
         /// </summary>
         RejectedOlder,
+
+        /// <summary>
+        /// The incoming payload was UNVERSIONED (generation &lt;= 0) while a real (positive) generation
+        /// is held. Gen 0 only comes from a damaged-store server, so it must not override the held
+        /// generation — but it carries no ordering info, so it is not provably older: a silent no-op,
+        /// never counted as <c>guardRejected</c> (qfg-9dxb.9).
+        /// </summary>
+        RejectedUnversioned,
     }
 
     /// <summary>

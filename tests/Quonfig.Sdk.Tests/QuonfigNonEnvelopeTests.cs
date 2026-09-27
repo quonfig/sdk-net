@@ -18,9 +18,10 @@ namespace Quonfig.Sdk.Tests;
 ///     proxy/WAF) is a leg error. It must not wipe an established client's keys, must not lower the
 ///     held generation, must let the hedge fail over to the secondary, and must not pin its ETag
 ///     so later 304s keep the junk "current".</description></item>
-///   <item><description>Fix A: an unversioned install (generation absent/0) still installs (the
-///     carve-out), but never lowers a positive held generation — e.g. a <c>qfg serve</c> payload
-///     (version + environment, no generation).</description></item>
+///   <item><description>Fix A / qfg-9dxb.9: an unversioned payload (generation absent/0) never
+///     lowers a positive held generation and does not install over one; a client that has never
+///     held a real generation — e.g. one talking to <c>qfg serve</c> (version + environment, no
+///     generation) — keeps installing each unversioned payload.</description></item>
 /// </list>
 /// </summary>
 public sealed class QuonfigNonEnvelopeTests
@@ -133,7 +134,7 @@ public sealed class QuonfigNonEnvelopeTests
     }
 
     [Fact]
-    public async Task EstablishedClient_QfgServePayload_InstallsViaCarveOut_KeepsHeldGeneration()
+    public async Task EstablishedClient_UnversionedPayload_DoesNotInstallOverHeldGeneration()
     {
         using var server = WireMockServer.Start();
         Serve(server, EnvelopeWithKey("flag.old", 42));
@@ -142,20 +143,40 @@ public sealed class QuonfigNonEnvelopeTests
         await client.InitAsync();
         client.HeldGeneration.Should().Be(42);
 
-        // `qfg serve` sends version + environment but no generation.
+        // An envelope with no generation (e.g. a damaged-store server) arrives while gen 42 is held.
         Serve(server, EnvelopeWithKey("flag.served", generation: null));
         await client.RefreshAsync();
 
-        client.Keys().Should().Contain("flag.served", "an unversioned envelope still installs (carve-out)");
-        client.Keys().Should().NotContain("flag.old");
-        client.NetworkInstallCount.Should().Be(2);
-        client.HeldGeneration.Should().Be(42,
-            "an unversioned install must never lower a positive held generation");
+        // qfg-9dxb.9: an unversioned payload installs only while the held generation is 0.
+        client.Keys().Should().Contain("flag.old");
+        client.Keys().Should().NotContain("flag.served", "an unversioned envelope must not override a held real generation");
+        client.NetworkInstallCount.Should().Be(1);
+        client.HeldGeneration.Should().Be(42);
 
-        // And an older positive snapshot is therefore still rejected afterwards.
+        // And an older positive snapshot is still rejected.
         Serve(server, EnvelopeWithKey("flag.older", 41));
         await client.RefreshAsync();
-        client.Keys().Should().Contain("flag.served");
+        client.Keys().Should().Contain("flag.old");
         client.HeldGeneration.Should().Be(42);
+    }
+
+    [Fact]
+    public async Task QfgServeOnlyClient_KeepsInstallingUnversionedPayloads()
+    {
+        using var server = WireMockServer.Start();
+        // `qfg serve` sends version + environment but no generation.
+        Serve(server, EnvelopeWithKey("flag.first", generation: null));
+
+        await using var client = NewClient(server);
+        await client.InitAsync();
+        client.Keys().Should().Contain("flag.first");
+
+        Serve(server, EnvelopeWithKey("flag.second", generation: null));
+        await client.RefreshAsync();
+
+        client.Keys().Should().Contain("flag.second", "a client that never held a real generation keeps installing unversioned payloads");
+        client.Keys().Should().NotContain("flag.first");
+        client.NetworkInstallCount.Should().Be(2);
+        client.HeldGeneration.Should().Be(0);
     }
 }

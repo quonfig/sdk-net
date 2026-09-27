@@ -23,8 +23,9 @@ namespace Quonfig.Sdk.Tests;
 ///     fallback-poller engage fetch) is a silent no-op: still not installed, still advances the
 ///     liveness stamp exactly where it did before, but NOT counted. The server re-sending config the
 ///     client already holds is normal steady-state traffic, not a failover signal.</description></item>
-///   <item><description>The unversioned (generation &lt;= 0) carve-out is untouched: such a snapshot
-///     is INSTALLED, never rejected, so it can never be counted.</description></item>
+///   <item><description>An unversioned (generation &lt;= 0) snapshot while a real generation is held
+///     is rejected (qfg-9dxb.9) but is not provably older, so it is a silent no-op and never
+///     counted.</description></item>
 /// </list>
 /// Drives the real network install paths (HTTP hedged fetch and SSE push) through the live client and
 /// drains the real <see cref="FailoverCollector"/>, so deleting the narrowing makes these fail.
@@ -240,12 +241,13 @@ public sealed class QuonfigGuardRejectedCountingTests
     }
 
     /// <summary>
-    /// The unversioned (generation &lt;= 0) carve-out is untouched by qfg-rr5b: such a snapshot carries
-    /// no ordering information, so it INSTALLS rather than being rejected, and therefore can never be
-    /// counted as a guard rejection.
+    /// qfg-9dxb.9: an unversioned (generation &lt;= 0) snapshot arriving while a positive generation is
+    /// held is REJECTED (it must not move the client backward), but it is not provably older — it
+    /// carries no ordering information — so the rejection is a silent no-op and is never counted as
+    /// a guard rejection.
     /// </summary>
     [Fact]
-    public async Task UnversionedSnapshot_IsInstalled_AndNotCounted()
+    public async Task UnversionedSnapshot_OverHeldGeneration_IsRejected_AndNotCounted()
     {
         using var server = WireMockServer.Start();
         Serve(server, generation: 42, sseBody: SseHeartbeatOnly);
@@ -254,16 +256,14 @@ public sealed class QuonfigGuardRejectedCountingTests
         await client.InitAsync();
         client.HeldGeneration.Should().Be(42);
 
-        // An UNVERSIONED (generation 0) snapshot — a server that predates the watermark, or one whose
-        // rev-count failed.
+        // An UNVERSIONED (generation 0) snapshot — a server whose rev-count failed (damaged store).
         Serve(server, generation: 0, sseBody: SseHeartbeatOnly);
         await client.RefreshAsync();
 
-        client.HeldGeneration.Should().Be(42,
-            "gen<=0 carve-out installs, but never lowers the positive held generation (qfg-9dxb.3 Fix A)");
-        client.NetworkInstallCount.Should().Be(2, "the carve-out install advances the count");
+        client.HeldGeneration.Should().Be(42, "a gen<=0 payload never lowers the held generation");
+        client.NetworkInstallCount.Should().Be(1, "a gen<=0 payload does not install over a held positive generation");
 
         GuardRejected(client).Should().Be(0L,
-            "the unversioned carve-out installs, so there is no rejection to count");
+            "an unversioned payload is not provably older, so its rejection is a silent no-op, not guardRejected");
     }
 }
