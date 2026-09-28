@@ -120,6 +120,17 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex)
     {
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, null);
+    }
+
+    // keyPath: the config keys already being resolved above this one through decryptWith. A
+    // decryptWith pointing back onto the path (a key config decrypted with itself, or A -> B -> A)
+    // is a cycle and fails with QuonfigDecryptionException instead of recursing into an
+    // uncatchable StackOverflowException (qfg-9dxb.7, sdk-go qfg-9dxb.4). Null at the top level.
+    private Value Resolve(
+        Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
+        out int weightedValueIndex, string[]? keyPath)
+    {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(configKey);
@@ -139,12 +150,12 @@ public sealed class Resolver
 
         if (candidate.Type == ValueType.WeightedValues)
         {
-            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex);
+            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, keyPath);
         }
 
         if (candidate.Confidential && !string.IsNullOrEmpty(candidate.DecryptWith))
         {
-            return ResolveDecryption(candidate, configKey, contexts);
+            return ResolveDecryption(candidate, configKey, contexts, keyPath);
         }
 
         return candidate;
@@ -172,7 +183,7 @@ public sealed class Resolver
 
     private Value ResolveWeighted(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex)
+        out int weightedValueIndex, string[]? keyPath)
     {
         weightedValueIndex = -1;
         if (candidate.Payload is not WeightedValuesPayload wv) return candidate;
@@ -202,7 +213,7 @@ public sealed class Resolver
 
         // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc. The bucket
         // index is the one we just picked — inner resolution doesn't change it.
-        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts);
+        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, keyPath);
     }
 
     private static double UserFraction(string configKey, string? hashByPropertyName, ContextSet contexts)
@@ -231,8 +242,15 @@ public sealed class Resolver
 
     // ----- Decryption -----
 
-    private Value ResolveDecryption(Value candidate, string configKey, ContextSet contexts)
+    private Value ResolveDecryption(Value candidate, string configKey, ContextSet contexts, string[]? keyPath)
     {
+        keyPath = Append(keyPath, configKey);
+        if (Array.IndexOf(keyPath, candidate.DecryptWith) >= 0)
+        {
+            throw new QuonfigDecryptionException(
+                $"decryption key config \"{candidate.DecryptWith}\" is part of a decryptWith cycle");
+        }
+
         Value? keyValue = _keyResolver(candidate.DecryptWith!, contexts);
         if (keyValue is null)
         {
@@ -244,7 +262,7 @@ public sealed class Resolver
         try
         {
             // The key config can itself be PROVIDED — recurse so the env-var lookup happens.
-            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts);
+            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, keyPath);
         }
         catch (QuonfigException e)
         {
@@ -274,6 +292,15 @@ public sealed class Resolver
         // Plaintext remains confidential (for telemetry redaction); decryptWith is cleared since
         // the value is no longer ciphertext.
         return new Value(ValueType.String, plaintext, true, null);
+    }
+
+    private static string[] Append(string[]? path, string key)
+    {
+        if (path is null) return new[] { key };
+        var next = new string[path.Length + 1];
+        Array.Copy(path, next, path.Length);
+        next[path.Length] = key;
+        return next;
     }
 
     // ----- Coercion -----

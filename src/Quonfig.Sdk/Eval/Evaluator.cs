@@ -62,33 +62,40 @@ public sealed class Evaluator
         if (contexts is null) throw new ArgumentNullException(nameof(contexts));
 #endif
         var row = GetOrParse(config);
-        return EvaluateRow(row, contexts, environmentId);
+        return EvaluateRow(row, contexts, environmentId, null);
     }
 
-    private EvaluationMatch EvaluateRow(ConfigRow row, ContextSet contexts, string? environmentId)
+    // segPath: the keys of the configs currently being evaluated above this one through
+    // IN_SEG / NOT_IN_SEG. A segment reference back onto the path is a cycle and is treated as a
+    // missing segment instead of recursing into an uncatchable StackOverflowException
+    // (qfg-9dxb.7, sdk-go qfg-9dxb.4). It is a path, not a global visited set, so a diamond (two
+    // segments that both reference a third) still resolves. Null for the top-level evaluation.
+    private EvaluationMatch EvaluateRow(
+        ConfigRow row, ContextSet contexts, string? environmentId, string[]? segPath)
     {
         if (!string.IsNullOrEmpty(environmentId))
         {
             var env = row.FindEnvironment(environmentId);
             if (env is not null)
             {
-                var m = EvaluateRules(row, env.Rules, contexts);
+                var m = EvaluateRules(row, env.Rules, contexts, segPath);
                 if (m is not null) return m;
             }
         }
 
-        var def = EvaluateRules(row, row.DefaultRules, contexts);
+        var def = EvaluateRules(row, row.DefaultRules, contexts, segPath);
         if (def is not null) return def;
 
         return EvaluationMatch.NoMatch(row.Id, row.Key, row.ValueType);
     }
 
-    private EvaluationMatch? EvaluateRules(ConfigRow row, IReadOnlyList<Rule> rules, ContextSet contexts)
+    private EvaluationMatch? EvaluateRules(
+        ConfigRow row, IReadOnlyList<Rule> rules, ContextSet contexts, string[]? segPath)
     {
         for (int i = 0; i < rules.Count; i++)
         {
             var rule = rules[i];
-            if (!AllCriteriaMatch(rule.Criteria, contexts)) continue;
+            if (!AllCriteriaMatch(row.Key, rule.Criteria, contexts, segPath)) continue;
 
             // Resolver expands PROVIDED, weighted-buckets, decryption, env-var coercion.
             // It throws on env-var-missing / decryption failure — let it propagate so the
@@ -154,16 +161,17 @@ public sealed class Evaluator
         return false;
     }
 
-    private bool AllCriteriaMatch(IReadOnlyList<Criterion> criteria, ContextSet contexts)
+    private bool AllCriteriaMatch(
+        string currentKey, IReadOnlyList<Criterion> criteria, ContextSet contexts, string[]? segPath)
     {
         foreach (var c in criteria)
         {
-            if (!EvaluateOne(c, contexts)) return false;
+            if (!EvaluateOne(currentKey, c, contexts, segPath)) return false;
         }
         return true;
     }
 
-    private bool EvaluateOne(Criterion criterion, ContextSet contexts)
+    private bool EvaluateOne(string currentKey, Criterion criterion, ContextSet contexts, string[]? segPath)
     {
         var lookup = string.IsNullOrEmpty(criterion.PropertyName)
             ? ContextLookup.Absent
@@ -175,9 +183,17 @@ public sealed class Evaluator
         {
             segResolver = segKey =>
             {
+                // A reference back onto the current evaluation path is a cycle: treat it like a
+                // missing segment (IN_SEG false, NOT_IN_SEG true), matching sdk-go.
+                if (string.Equals(segKey, currentKey, StringComparison.Ordinal)
+                    || (segPath is not null && Array.IndexOf(segPath, segKey) >= 0))
+                {
+                    return SegmentResolverResult.NotFound;
+                }
                 var seg = _store.Get(segKey);
                 if (seg is null) return SegmentResolverResult.NotFound;
-                var subMatch = Evaluate(seg, contexts, "");
+                var childPath = Append(segPath, currentKey);
+                var subMatch = EvaluateRow(GetOrParse(seg), contexts, "", childPath);
                 if (!subMatch.IsMatch || subMatch.Value is null) return SegmentResolverResult.NotFound;
                 return SegmentResolverResult.FromValue(subMatch.Value.Payload is bool b && b);
             };
@@ -216,9 +232,18 @@ public sealed class Evaluator
     {
         foreach (var rule in rules)
         {
-            if (AllCriteriaMatch(rule.Criteria, contexts)) return rule.Value;
+            if (AllCriteriaMatch(row.Key, rule.Criteria, contexts, null)) return rule.Value;
         }
         return null;
+    }
+
+    private static string[] Append(string[]? path, string key)
+    {
+        if (path is null) return new[] { key };
+        var next = new string[path.Length + 1];
+        Array.Copy(path, next, path.Length);
+        next[path.Length] = key;
+        return next;
     }
 
     private ConfigRow GetOrParse(ConfigResponse response)
