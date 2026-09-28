@@ -76,11 +76,16 @@ public sealed class DatadirWatcherTests : IDisposable
     [Fact]
     public async Task Bursts_Coalesce_Into_A_Single_OnChange()
     {
+        // De-flake (windows/net48): with a 200ms debounce and one Task.Run hop per write, a
+        // thread-pool stall mid-burst (net48 injects threads ~500ms apart) opened a >200ms quiet
+        // gap, so the watcher correctly fired twice. Write the burst from a single hop and use a
+        // 1s debounce so the burst is decisively inside one window. Assertion unchanged.
+        var debounce = TimeSpan.FromSeconds(1);
         int count = 0;
         using var firedAtLeastOnce = new SemaphoreSlim(0, 10);
         await using var watcher = new DatadirWatcher(
             _root,
-            TimeSpan.FromMilliseconds(200),
+            debounce,
             onChange: () =>
             {
                 Interlocked.Increment(ref count);
@@ -92,17 +97,21 @@ public sealed class DatadirWatcherTests : IDisposable
         watcher.Start().Should().BeTrue();
 
         // Burst of writes — must coalesce.
-        for (int i = 0; i < 10; i++)
+        await Task.Run(() =>
         {
-            await WriteAllTextCompatAsync(Path.Combine(_root, "configs", $"f{i}.config.json"), "{\"key\":\"x\"}");
-        }
+            for (int i = 0; i < 10; i++)
+            {
+                File.WriteAllText(Path.Combine(_root, "configs", $"f{i}.config.json"), "{\"key\":\"x\"}");
+            }
+        });
 
         // Wait for the debounce to elapse + tolerance.
-        bool fired = await firedAtLeastOnce.WaitAsync(TimeSpan.FromMilliseconds(200 + 1000));
+        bool fired = await firedAtLeastOnce.WaitAsync(debounce + TimeSpan.FromSeconds(2));
         fired.Should().BeTrue();
-        // Give any in-flight extra callbacks a chance to land.
-        await Task.Delay(TimeSpan.FromMilliseconds(300));
-        Volatile.Read(ref count).Should().Be(1, "all 10 writes within the 200ms debounce window must coalesce");
+        // Give any in-flight extra callbacks a chance to land (longer than one debounce, so a
+        // straggling event would have re-armed and fired by now).
+        await Task.Delay(debounce + TimeSpan.FromMilliseconds(500));
+        Volatile.Read(ref count).Should().Be(1, "all 10 writes within the debounce window must coalesce");
     }
 
     [Fact]
