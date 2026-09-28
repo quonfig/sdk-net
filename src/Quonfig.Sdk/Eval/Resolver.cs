@@ -127,7 +127,7 @@ public sealed class Resolver
     /// Same as <see cref="Resolve(Value, string, ValueType, ContextSet, out int)"/> but also reports
     /// <paramref name="missingHashPropertyName"/>: the weighted rollout's
     /// <c>hashByPropertyName</c> when that property is missing from <paramref name="contexts"/>
-    /// (the rollout then serves its first variant), or null otherwise (qfg-9dxb.8).
+    /// (or its value is null; the rollout then hashes an empty value), or null otherwise (qfg-9dxb.8).
     /// </summary>
     public Value Resolve(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
@@ -232,19 +232,31 @@ public sealed class Resolver
         return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, keyPath);
     }
 
-    // hashPropertyMissing: hashByPropertyName is set but absent from the context, so the rollout
-    // falls back to fraction 0.0 (the first variant). A property present with a null or empty
-    // value is not missing; it hashes as the empty string.
+    // Random source for rollouts with no hashByPropertyName (qfg-t9wo). System.Random is not
+    // thread-safe and Random.Shared is net6+, so one instance is shared behind a lock (the same
+    // shape as sdk-go's mutex-guarded rand in evalcore/weighted.go).
+    private static readonly Random SharedRandom = new();
+    private static readonly object SharedRandomLock = new();
+
+    private static double RandomFraction()
+    {
+        lock (SharedRandomLock) { return SharedRandom.NextDouble(); }
+    }
+
+    // No hashByPropertyName: a random fraction on every evaluation (qfg-t9wo).
+    // hashByPropertyName set but its value missing (context, property, or null value) or "":
+    // hash configKey + "", so every such caller lands in the same bucket (qfg-9dxb.8).
+    // hashPropertyMissing is true only for the missing/null shapes, not for a present "".
     private static double UserFraction(
         string configKey, string? hashByPropertyName, ContextSet contexts, out bool hashPropertyMissing)
     {
         hashPropertyMissing = false;
-        if (string.IsNullOrEmpty(hashByPropertyName)) return 0.0;
+        if (string.IsNullOrEmpty(hashByPropertyName)) return RandomFraction();
         var lookup = contexts.GetContextValue(hashByPropertyName);
-        if (!lookup.Exists)
+        if (!lookup.Exists || lookup.Value is null or ContextValueString { Value: null })
         {
             hashPropertyMissing = true;
-            return 0.0;
+            return Murmur3.HashZeroToOne(configKey);
         }
         string valueRendered = RenderContextValue(lookup.Value);
         return Murmur3.HashZeroToOne(configKey + valueRendered);

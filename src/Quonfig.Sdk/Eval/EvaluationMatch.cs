@@ -27,7 +27,7 @@ public sealed class EvaluationMatch
 
     /// <summary>
     /// The weighted rollout's <c>hashByPropertyName</c> when that property was missing from the
-    /// context, so the rollout served its first variant; null otherwise (qfg-9dxb.8).
+    /// context (or its value was null), so the rollout hashed an empty value; null otherwise (qfg-9dxb.8).
     /// </summary>
     public string? MissingHashPropertyName { get; }
 

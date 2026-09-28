@@ -33,7 +33,7 @@ namespace Quonfig.Sdk;
 /// (only on <see cref="Sdk.Reason.TargetingMatch"/> or <see cref="Sdk.Reason.Split"/>),
 /// <c>weightedValueIndex</c> (only on Split), <c>environment</c> (omitted when not known),
 /// <c>hashPropertyMissing</c> (<c>true</c>, only when a weighted rollout's hash property was missing
-/// from the context and the first variant was served).</description></item>
+/// from the context, so an empty value was hashed).</description></item>
 /// </list>
 /// </summary>
 /// <typeparam name="T">The typed value's CLR type (string, bool, long, double, IReadOnlyList&lt;string&gt;, …).</typeparam>

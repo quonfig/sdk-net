@@ -1480,7 +1480,7 @@ public sealed class Quonfig : IQuonfig
         if (match.MissingHashPropertyName is not null && _hashPropertyMissingWarned.TryAdd(match.ConfigKey, 0))
         {
             _logger.LogWarning(
-                "quonfig: weighted rollout for \"{Key}\" hashes on \"{Property}\" which is missing from context; using first variant",
+                "quonfig: weighted rollout for \"{Key}\" hashes on \"{Property}\" which is missing from context; hashing an empty value instead",
                 match.ConfigKey, match.MissingHashPropertyName);
         }
 

@@ -91,8 +91,8 @@ public sealed class EvaluatorTests
     public void Evaluate_SplitReason_WhenWeightedValueResolved()
     {
         // A weighted-values resolution reports reason SPLIT with the chosen bucket index, matching
-        // sdk-go and integration-test-data. With no hashByPropertyName the resolver deterministically
-        // picks bucket 0. qfg-q7yz.
+        // sdk-go and integration-test-data. qfg-q7yz. With no hashByPropertyName the bucket is
+        // random per evaluation (qfg-t9wo), so only the pairing of value and index is asserted.
         var cfg = Parse("of.weighted", """
             {
               "id": "3",
@@ -122,8 +122,8 @@ public sealed class EvaluatorTests
         var m = ev.Evaluate(cfg, new ContextSet(), "");
 
         m.IsMatch.Should().BeTrue();
-        m.Value!.Payload.Should().Be("variant-a");
-        m.WeightedValueIndex.Should().Be(0);
+        m.WeightedValueIndex.Should().BeOneOf(0, 1);
+        m.Value!.Payload.Should().Be(m.WeightedValueIndex == 0 ? "variant-a" : "variant-b");
         m.Reason.Should().Be(Reason.Split);
     }
 

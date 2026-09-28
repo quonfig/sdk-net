@@ -196,22 +196,33 @@ public sealed class ResolverTests
         output.Payload.Should().Be(2L);
     }
 
+    // qfg-t9wo: no hashByPropertyName -> a random variant on every evaluation (v1.3.0 always
+    // served bucket 0; intentionally changed).
     [Fact]
-    public void Resolve_Weighted_NoHashProperty_FallsBackToBucketZero()
+    public void Resolve_Weighted_NoHashProperty_PicksRandomVariant()
     {
         var r = new Resolver();
         var wv = WeightedInt(null!, (1, 100L), (1, 200L));
-        var output = r.Resolve(wv, "any.flag", ValueType.Int, new ContextSet());
-        output.Payload.Should().Be(100L);
+        var seen = new HashSet<object?>();
+        for (int i = 0; i < 1000; i++)
+        {
+            seen.Add(r.Resolve(wv, "any.flag", ValueType.Int, new ContextSet()).Payload);
+        }
+        seen.Should().BeEquivalentTo(new object[] { 100L, 200L });
     }
 
+    // qfg-9dxb.8: missing property -> hash configKey + "", same as a present "" (v1.3.0 served
+    // bucket 0; intentionally changed).
     [Fact]
-    public void Resolve_Weighted_MissingProperty_FallsBackToBucketZero()
+    public void Resolve_Weighted_MissingProperty_HashesEmptyValue()
     {
         var r = new Resolver();
         var wv = WeightedInt("user.id", (1, 100L), (1, 200L));
-        var output = r.Resolve(wv, "any.flag", ValueType.Int, new ContextSet());
-        output.Payload.Should().Be(100L);
+        var empty = r.Resolve(wv, "any.flag", ValueType.Int, UserCtx("id", ""), out int emptyIndex);
+        var missing = r.Resolve(wv, "any.flag", ValueType.Int, new ContextSet(), out int missingIndex, out string? missingProp);
+        missing.Payload.Should().Be(empty.Payload);
+        missingIndex.Should().Be(emptyIndex);
+        missingProp.Should().Be("user.id");
     }
 
     // ----- Weighted-of-Provided: weighted variant whose chosen value is a PROVIDED ENV_VAR — recursive resolve. -----
