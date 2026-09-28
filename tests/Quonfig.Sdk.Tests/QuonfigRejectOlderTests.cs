@@ -126,6 +126,59 @@ public sealed class QuonfigRejectOlderTests
     }
 
     /// <summary>
+    /// qfg-9dxb.9 follow-up: an IGNORED gen-0 200 must not leave its ETag remembered. api-delivery's
+    /// ETag is the git sha, and it can repair the generation for the SAME sha, so if the ignored
+    /// response's ETag stuck, every later poll would 304 and the client would stay on the old config
+    /// until the next commit.
+    /// </summary>
+    [Fact]
+    public async Task IgnoredGenZeroSnapshot_DoesNotPinItsETag()
+    {
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaA\"")
+                .WithBody(MarkerEnvelopeJson(5, "A")));
+
+        await using var client = NewClient(server);
+        await client.InitAsync();
+        client.GetString("marker").Should().Be("A");
+        client.HeldGeneration.Should().Be(5);
+
+        // Damaged-store server: sha B at generation 0 — ignored.
+        server.Reset();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaB\"")
+                .WithBody(MarkerEnvelopeJson(0, "B")));
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("A", "the gen-0 payload is ignored while generation 5 is held");
+
+        // Repaired server: the SAME sha B, now at generation 6. It answers 304 to If-None-Match "shaB".
+        server.Reset();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet()
+                .WithHeader("If-None-Match", "\"shaB\""))
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(304).WithHeader("ETag", "\"shaB\""));
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaB\"")
+                .WithBody(MarkerEnvelopeJson(6, "B")));
+        await client.RefreshAsync();
+
+        client.GetString("marker").Should().Be("B", "the ignored gen-0 response's ETag must not turn the repaired gen-6 payload into a 304");
+        client.HeldGeneration.Should().Be(6);
+    }
+
+    /// <summary>
     /// qfg-9dxb.9: a client that has only ever seen generation 0 (held == 0, never a real generation)
     /// keeps installing each gen-0 payload, so it never freezes on stale config.
     /// </summary>

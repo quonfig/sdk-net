@@ -897,8 +897,14 @@ public sealed class Quonfig : IQuonfig
                 // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the
                 // fallback poller's engage-time fetch). Nothing to install and nothing wrong — a silent
                 // no-op, deliberately NOT counted as guardRejected (qfg-rr5b).
-                // NetworkInstallOutcome.RejectedUnversioned: a gen<=0 payload while a real generation
-                // is held — not installed, but not provably older, so also a silent no-op (qfg-9dxb.9).
+                else if (outcome == NetworkInstallOutcome.RejectedUnversioned)
+                {
+                    // A gen<=0 payload while a real generation is held — not installed, but not
+                    // provably older, so a silent no-op (qfg-9dxb.9). Forget its ETag: the server can
+                    // repair the generation for the SAME sha, and a remembered ETag would 304 the
+                    // repaired payload until the next commit (qfg-9dxb.9 follow-up).
+                    transport.ForgetETag(leg.LegIndex, leg.ETag);
+                }
             }
         }
 

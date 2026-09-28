@@ -458,7 +458,7 @@ public sealed class HttpTransport : IDisposable
                 {
                     lock (_etagLock) { _etags[legIndex] = responseETag; }
                 }
-                return LegResult.Ok(legIndex, envelope);
+                return LegResult.Ok(legIndex, envelope, responseETag);
             }
             return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}")));
         }
@@ -485,6 +485,25 @@ public sealed class HttpTransport : IDisposable
         finally
         {
             response?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Clears leg <paramref name="legIndex"/>'s ETag slot if it still holds <paramref name="etag"/>.
+    /// Called when the install guard ignored that leg's gen&lt;=0 payload: api-delivery can repair the
+    /// generation for the SAME sha (same ETag), so a remembered ETag would turn the repaired payload
+    /// into a 304 until the next commit (qfg-9dxb.9 follow-up). Compare-and-clear so a newer ETag
+    /// written by an overlapping cycle is left alone.
+    /// </summary>
+    internal void ForgetETag(int legIndex, string? etag)
+    {
+        if (etag is null || legIndex < 0 || legIndex >= _etags.Length) return;
+        lock (_etagLock)
+        {
+            if (string.Equals(_etags[legIndex], etag, StringComparison.Ordinal))
+            {
+                _etags[legIndex] = null;
+            }
         }
     }
 
