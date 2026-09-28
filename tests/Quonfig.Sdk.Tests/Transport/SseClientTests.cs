@@ -162,19 +162,22 @@ public sealed class SseClientTests
     [Fact]
     public async Task ParseStreamAsync_ReArmsWatchdogOnEachRead()
     {
+        // qfg-a8xf: each 50ms gap is 40x under the 2s read timeout, so a load-starved net48 runner
+        // cannot trip the watchdog on a healthy gap (the old 250ms timeout was only 5x). 45
+        // keepalives + the data chunk keep the whole stream (~2.3s) longer than one timeout, so
+        // the test still fails if the watchdog is armed once instead of re-armed on each read.
+        var chunks = Enumerable.Repeat(": keepalive\n\n", 45)
+            .Append("data: " + MinimalEnvelopeJson("v1") + "\n\n")
+            .ToArray();
         using var trickler = new TricklingStream(
-            chunks: new[]
-            {
-                ": keepalive\n\n", ": keepalive\n\n", ": keepalive\n\n",
-                ": keepalive\n\n", "data: " + MinimalEnvelopeJson("v1") + "\n\n",
-            },
+            chunks: chunks,
             interChunkDelay: TimeSpan.FromMilliseconds(50));
         ConfigEnvelope? got = null;
 
         var consumed = await SseClient.ParseStreamAsync(
             trickler,
             env => got = env,
-            readTimeout: TimeSpan.FromMilliseconds(250),
+            readTimeout: TimeSpan.FromSeconds(2),
             cancellationToken: CancellationToken.None);
 
         consumed.Should().BeTrue();
