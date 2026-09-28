@@ -55,6 +55,11 @@ public sealed class Quonfig : IQuonfig
 
     private readonly QuonfigOptions _opts;
     private readonly ILogger _logger;
+
+    // Config keys already warned about a weighted rollout whose hash property was missing from the
+    // context (qfg-9dxb.8). One warning per key per client; bounded by the number of flags.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _hashPropertyMissingWarned =
+        new(StringComparer.Ordinal);
     private string? _effectiveEnvironment;
 
     /// <summary>
@@ -1472,6 +1477,13 @@ public sealed class Quonfig : IQuonfig
         }
 #pragma warning restore CA1031
 
+        if (match.MissingHashPropertyName is not null && _hashPropertyMissingWarned.TryAdd(match.ConfigKey, 0))
+        {
+            _logger.LogWarning(
+                "quonfig: weighted rollout for \"{Key}\" hashes on \"{Property}\" which is missing from context; using first variant",
+                match.ConfigKey, match.MissingHashPropertyName);
+        }
+
         if (!match.IsMatch || match.Value is null)
         {
             return new EvaluationDetails<T>(
@@ -1600,6 +1612,7 @@ public sealed class Quonfig : IQuonfig
         {
             m["weightedValueIndex"] = match.WeightedValueIndex;
         }
+        if (match.MissingHashPropertyName is not null) m["hashPropertyMissing"] = true;
         if (!string.IsNullOrEmpty(_effectiveEnvironment)) m["environment"] = _effectiveEnvironment;
         return m;
     }

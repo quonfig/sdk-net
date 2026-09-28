@@ -31,7 +31,9 @@ namespace Quonfig.Sdk;
 /// <item><description><see cref="Metadata"/> — never null; immutable. Standard keys (camelCase,
 /// matching sdk-java): <c>configId</c>, <c>configKey</c>, <c>configType</c>, <c>ruleIndex</c>
 /// (only on <see cref="Sdk.Reason.TargetingMatch"/> or <see cref="Sdk.Reason.Split"/>),
-/// <c>weightedValueIndex</c> (only on Split), <c>environment</c> (omitted when not known).</description></item>
+/// <c>weightedValueIndex</c> (only on Split), <c>environment</c> (omitted when not known),
+/// <c>hashPropertyMissing</c> (<c>true</c>, only when a weighted rollout's hash property was missing
+/// from the context and the first variant was served).</description></item>
 /// </list>
 /// </summary>
 /// <typeparam name="T">The typed value's CLR type (string, bool, long, double, IReadOnlyList&lt;string&gt;, …).</typeparam>

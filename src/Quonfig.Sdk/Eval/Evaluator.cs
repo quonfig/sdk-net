@@ -102,7 +102,7 @@ public sealed class Evaluator
             // caller can surface the right error code. weightedIndex is >= 0 only when a
             // weighted-values bucket was chosen.
             var resolved = _resolver.Resolve(
-                rule.Value, row.Key, row.ValueType, contexts, out int weightedIndex);
+                rule.Value, row.Key, row.ValueType, contexts, out int weightedIndex, out string? missingHashProperty);
 
             // Canonical reason (mirrors sdk-go runtime_eval.go hasTargetingRules + integration-test-data
             // telemetry.yaml): SPLIT when a weighted bucket was resolved; otherwise STATIC only when
@@ -124,7 +124,7 @@ public sealed class Evaluator
             }
 
             return EvaluationMatch.Matched(
-                resolved, i, weightedIndex, reason, row.Id, row.Key, row.ValueType);
+                resolved, i, weightedIndex, reason, row.Id, row.Key, row.ValueType, missingHashProperty);
         }
         return null;
     }

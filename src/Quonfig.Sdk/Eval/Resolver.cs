@@ -120,7 +120,20 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, null);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out _, null);
+    }
+
+    /// <summary>
+    /// Same as <see cref="Resolve(Value, string, ValueType, ContextSet, out int)"/> but also reports
+    /// <paramref name="missingHashPropertyName"/>: the weighted rollout's
+    /// <c>hashByPropertyName</c> when that property is missing from <paramref name="contexts"/>
+    /// (the rollout then serves its first variant), or null otherwise (qfg-9dxb.8).
+    /// </summary>
+    public Value Resolve(
+        Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
+        out int weightedValueIndex, out string? missingHashPropertyName)
+    {
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null);
     }
 
     // keyPath: the config keys already being resolved above this one through decryptWith. A
@@ -129,7 +142,7 @@ public sealed class Resolver
     // uncatchable StackOverflowException (qfg-9dxb.7, sdk-go qfg-9dxb.4). Null at the top level.
     private Value Resolve(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, string[]? keyPath)
+        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath)
     {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(candidate);
@@ -142,6 +155,7 @@ public sealed class Resolver
 #endif
 
         weightedValueIndex = -1;
+        missingHashPropertyName = null;
 
         if (candidate.Type == ValueType.Provided)
         {
@@ -150,7 +164,7 @@ public sealed class Resolver
 
         if (candidate.Type == ValueType.WeightedValues)
         {
-            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, keyPath);
+            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, keyPath);
         }
 
         if (candidate.Confidential && !string.IsNullOrEmpty(candidate.DecryptWith))
@@ -183,17 +197,19 @@ public sealed class Resolver
 
     private Value ResolveWeighted(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, string[]? keyPath)
+        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath)
     {
         weightedValueIndex = -1;
+        missingHashPropertyName = null;
         if (candidate.Payload is not WeightedValuesPayload wv) return candidate;
         if (wv.Variants.Count == 0) return candidate;
 
-        double fraction = UserFraction(configKey, wv.HashByPropertyName, contexts);
+        double fraction = UserFraction(configKey, wv.HashByPropertyName, contexts, out bool hashPropertyMissing);
 
         long total = 0;
         foreach (var v in wv.Variants) total += v.Weight;
         if (total <= 0) return candidate;
+        if (hashPropertyMissing) missingHashPropertyName = wv.HashByPropertyName;
 
         double threshold = fraction * total;
 
@@ -213,14 +229,23 @@ public sealed class Resolver
 
         // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc. The bucket
         // index is the one we just picked — inner resolution doesn't change it.
-        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, keyPath);
+        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, keyPath);
     }
 
-    private static double UserFraction(string configKey, string? hashByPropertyName, ContextSet contexts)
+    // hashPropertyMissing: hashByPropertyName is set but absent from the context, so the rollout
+    // falls back to fraction 0.0 (the first variant). A property present with a null or empty
+    // value is not missing; it hashes as the empty string.
+    private static double UserFraction(
+        string configKey, string? hashByPropertyName, ContextSet contexts, out bool hashPropertyMissing)
     {
+        hashPropertyMissing = false;
         if (string.IsNullOrEmpty(hashByPropertyName)) return 0.0;
         var lookup = contexts.GetContextValue(hashByPropertyName);
-        if (!lookup.Exists) return 0.0;
+        if (!lookup.Exists)
+        {
+            hashPropertyMissing = true;
+            return 0.0;
+        }
         string valueRendered = RenderContextValue(lookup.Value);
         return Murmur3.HashZeroToOne(configKey + valueRendered);
     }
@@ -262,7 +287,7 @@ public sealed class Resolver
         try
         {
             // The key config can itself be PROVIDED — recurse so the env-var lookup happens.
-            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, keyPath);
+            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, out _, keyPath);
         }
         catch (QuonfigException e)
         {

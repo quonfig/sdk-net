@@ -25,6 +25,12 @@ public sealed class EvaluationMatch
     /// </summary>
     public int WeightedValueIndex { get; }
 
+    /// <summary>
+    /// The weighted rollout's <c>hashByPropertyName</c> when that property was missing from the
+    /// context, so the rollout served its first variant; null otherwise (qfg-9dxb.8).
+    /// </summary>
+    public string? MissingHashPropertyName { get; }
+
     /// <summary>Why this match was produced. <see cref="Sdk.Reason.Default"/> when no rule matched.</summary>
     public Reason Reason { get; }
 
@@ -45,7 +51,8 @@ public sealed class EvaluationMatch
         Reason reason,
         string configId,
         string configKey,
-        ValueType valueType)
+        ValueType valueType,
+        string? missingHashPropertyName)
     {
         IsMatch = isMatch;
         Value = value;
@@ -55,6 +62,7 @@ public sealed class EvaluationMatch
         ConfigId = configId;
         ConfigKey = configKey;
         ValueType = valueType;
+        MissingHashPropertyName = missingHashPropertyName;
     }
 
     /// <summary>Builds a successful match. <paramref name="weightedValueIndex"/> is -1 unless the
@@ -62,9 +70,16 @@ public sealed class EvaluationMatch
     public static EvaluationMatch Matched(
         Value value, int ruleIndex, int weightedValueIndex, Reason reason,
         string configId, string configKey, ValueType valueType) =>
-        new(true, value, ruleIndex, weightedValueIndex, reason, configId, configKey, valueType);
+        new(true, value, ruleIndex, weightedValueIndex, reason, configId, configKey, valueType, null);
+
+    /// <summary>Same as <see cref="Matched(Value, int, int, Reason, string, string, ValueType)"/>,
+    /// also recording <see cref="MissingHashPropertyName"/>.</summary>
+    public static EvaluationMatch Matched(
+        Value value, int ruleIndex, int weightedValueIndex, Reason reason,
+        string configId, string configKey, ValueType valueType, string? missingHashPropertyName) =>
+        new(true, value, ruleIndex, weightedValueIndex, reason, configId, configKey, valueType, missingHashPropertyName);
 
     /// <summary>Builds a "no rule matched" match; the caller falls back to its own default.</summary>
     public static EvaluationMatch NoMatch(string configId, string configKey, ValueType valueType) =>
-        new(false, null, -1, -1, Reason.Default, configId, configKey, valueType);
+        new(false, null, -1, -1, Reason.Default, configId, configKey, valueType, null);
 }

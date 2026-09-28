@@ -5,6 +5,7 @@
 - **Fixed: a segment or decryption key that references itself (directly or through a chain) no longer crashes the process with a `StackOverflowException` (qfg-9dxb.7).** The segment is treated as not matching; the decryption fails like a wrong key and the getter returns its fallback.
 - **Fixed: a 200 response or SSE event that isn't a config payload (for example `{}` from a proxy) is ignored instead of wiping every key (qfg-9dxb.3).** HTTP tries the next URL.
 - **Changed: once the client holds versioned config, a payload with no generation is ignored instead of moving the client back to older config (qfg-9dxb.9).** Only a delivery server with a damaged git store sends such a payload. The client picks up that server's config at the next config change. A client that has never received a real generation still installs every payload.
+- **Added: `EvaluationDetails.Metadata` reports `hashPropertyMissing: true` when a weighted rollout hashes on a property missing from the context (qfg-9dxb.8).** Such evaluations serve the first variant, as before. The client now logs one `Warning` per flag when this happens. New public members: `EvaluationMatch.MissingHashPropertyName`, an `EvaluationMatch.Matched` overload, and a `Resolver.Resolve` overload that report the missing property.
 
 ## 1.3.0 - 2026-09-25
 
