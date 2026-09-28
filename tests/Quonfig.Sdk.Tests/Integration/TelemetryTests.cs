@@ -50,6 +50,14 @@ public class TelemetryTests
         Assert.Equal(TestSetup.List(TestSetup.Map("key", "feature-flag.weighted", "type", "FEATURE_FLAG", "value", 2L, "value_type", "int", "count", 1L, "reason", 3L, "selected_value", TestSetup.Map("int", 2L), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L, "weighted_value_index", 2L))), TestSetup.AggregatorPost(aggregator, "evaluation_summary", "/api/v1/telemetry"));
     }
 
+    [Fact(DisplayName = "reason is SPLIT for weighted value landing in bucket 0")]
+    public void ReasonIsSplitForWeightedValueLandingInBucket0()
+    {
+        object? aggregator = TestSetup.BuildAggregator("evaluation_summary", TestSetup.Map());
+        TestSetup.FeedAggregator(aggregator, "evaluation_summary", TestSetup.Map("keys", TestSetup.List("feature-flag.weighted")), TestSetup.Map("user", TestSetup.Map("tracking_id", "3e9459d6")));
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "feature-flag.weighted", "type", "FEATURE_FLAG", "value", 1L, "value_type", "int", "count", 1L, "reason", 3L, "selected_value", TestSetup.Map("int", 1L), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L, "weighted_value_index", 0L))), TestSetup.AggregatorPost(aggregator, "evaluation_summary", "/api/v1/telemetry"));
+    }
+
     [Fact(DisplayName = "reason is TARGETING_MATCH for feature flag fallthrough with targeting rules")]
     public void ReasonIsTargetingMatchForFeatureFlagFallthroughWithTargetingRules()
     {
