@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-09-28
 
-- **Fixed: a segment or decryption key that references itself (directly or through a chain) no longer crashes the process with a `StackOverflowException` (qfg-9dxb.7).** The segment is treated as not matching; the decryption fails like a wrong key and the getter returns its fallback.
-- **Fixed: a 200 response or SSE event that isn't a config payload (for example `{}` from a proxy) is ignored instead of wiping every key (qfg-9dxb.3).** HTTP tries the next URL.
-- **Changed: once the client holds versioned config, a payload with no generation is ignored instead of moving the client back to older config (qfg-9dxb.9).** Only a delivery server with a damaged git store sends such a payload. The client picks up that server's config at the next config change. A client that has never received a real generation still installs every payload.
 - **Changed: a weighted rollout that hashes on a property missing from the context now hashes an empty value, so every such caller gets the same variant for that flag (qfg-9dxb.8).** In 1.3.0 such callers always got the first variant, even one with weight 0. A null value counts as missing. `EvaluationDetails.Metadata` reports `hashPropertyMissing: true` and the client logs one `Warning` per flag. New public members: `EvaluationMatch.MissingHashPropertyName`, an `EvaluationMatch.Matched` overload, and a `Resolver.Resolve` overload that report the missing property.
 - **Fixed: a weighted rollout with no hash property configured now picks a random variant on every evaluation, weighted by the weights (qfg-t9wo).** In 1.3.0 it always served the first variant.
+- **Changed: once the client holds versioned config, a payload with no generation is ignored instead of moving the client back to older config (qfg-9dxb.9).** Only a delivery server with a damaged git store sends such a payload. The client picks up that server's config at the next config change. A client that has never received a real generation still installs every payload.
+- **Fixed: a segment or decryption key that references itself (directly or through a chain) no longer crashes the process with a `StackOverflowException` (qfg-9dxb.7).** The segment is treated as not matching; the decryption fails like a wrong key and the getter returns its fallback.
+- **Fixed: a 200 response or SSE event that isn't a config payload (for example `{}` from a proxy) is ignored instead of wiping every key (qfg-9dxb.3).** HTTP tries the next URL.
 
 ## 1.3.0 - 2026-09-25
 
