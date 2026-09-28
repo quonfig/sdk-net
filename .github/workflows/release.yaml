@@ -44,7 +44,7 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          ref: v2026.05.20
+          ref: v2026.09.28
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
