@@ -3,38 +3,64 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class DevOverridesTests
+public sealed class DevOverridesTests
 {
 
     [Fact(DisplayName = "override fires when quonfig-user.email matches")]
-    public void OverrideFiresWhenQuonfigUserEmailMatches()
+    public async Task OverrideFiresWhenQuonfigUserEmailMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.dev-override", TestSetup.Map("quonfig-user", TestSetup.Map("email", "bob@foo.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["quonfig-user"] = new ContextProperties { ["email"] = "bob@foo.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.dev-override");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "override does not fire when attribute absent (prod simulation)")]
-    public void OverrideDoesNotFireWhenAttributeAbsentProdSimulation()
+    public async Task OverrideDoesNotFireWhenAttributeAbsentProdSimulation()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.dev-override", TestSetup.Map("user", TestSetup.Map("email", "bob@foo.com")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "bob@foo.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.dev-override");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "override matches any email in IS_ONE_OF list")]
-    public void OverrideMatchesAnyEmailInIsOneOfList()
+    public async Task OverrideMatchesAnyEmailInIsOneOfList()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.dev-override.multi-email", TestSetup.Map("quonfig-user", TestSetup.Map("email", "alice@foo.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["quonfig-user"] = new ContextProperties { ["email"] = "alice@foo.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.dev-override.multi-email");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "override beats customer rule by priority")]
-    public void OverrideBeatsCustomerRuleByPriority()
+    public async Task OverrideBeatsCustomerRuleByPriority()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.dev-override.priority", TestSetup.Map("quonfig-user", TestSetup.Map("email", "bob@foo.com"), "user", TestSetup.Map("country", "DE")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["quonfig-user"] = new ContextProperties { ["email"] = "bob@foo.com" }, ["user"] = new ContextProperties { ["country"] = "DE" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.dev-override.priority");
+        Assert.True(actual);
     }
 }

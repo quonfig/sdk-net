@@ -3,640 +3,1163 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class EnabledTests
+public sealed class EnabledTests
 {
 
     [Fact(DisplayName = "returns the correct value for a simple flag")]
-    public void ReturnsTheCorrectValueForASimpleFlag()
+    public async Task ReturnsTheCorrectValueForASimpleFlag()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.simple", TestSetup.Map());
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.simple");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "always returns false for a non-boolean flag")]
-    public void AlwaysReturnsFalseForANonBooleanFlag()
+    public async Task AlwaysReturnsFalseForANonBooleanFlag()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.integer", TestSetup.Map());
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.integer");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for a PROP_IS_ONE_OF rule when any prop matches")]
-    public void ReturnsTrueForAPropIsOneOfRuleWhenAnyPropMatches()
+    public async Task ReturnsTrueForAPropIsOneOfRuleWhenAnyPropMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.properties.positive", TestSetup.Map("", TestSetup.Map("name", "michael", "domain", "something.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.properties.positive", new ContextSet { [""] = new ContextProperties { ["name"] = "michael", ["domain"] = "something.com" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for a PROP_IS_ONE_OF rule when no prop matches")]
-    public void ReturnsFalseForAPropIsOneOfRuleWhenNoPropMatches()
+    public async Task ReturnsFalseForAPropIsOneOfRuleWhenNoPropMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.properties.positive", TestSetup.Map("", TestSetup.Map("name", "lauren", "domain", "something.com")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.properties.positive", new ContextSet { [""] = new ContextProperties { ["name"] = "lauren", ["domain"] = "something.com" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for a PROP_IS_NOT_ONE_OF rule when any prop doesn't match")]
-    public void ReturnsTrueForAPropIsNotOneOfRuleWhenAnyPropDoesnTMatch()
+    public async Task ReturnsTrueForAPropIsNotOneOfRuleWhenAnyPropDoesnTMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.properties.negative", TestSetup.Map("", TestSetup.Map("name", "lauren", "domain", "prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.properties.negative", new ContextSet { [""] = new ContextProperties { ["name"] = "lauren", ["domain"] = "prefab.cloud" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for a PROP_IS_NOT_ONE_OF rule when all props match")]
-    public void ReturnsFalseForAPropIsNotOneOfRuleWhenAllPropsMatch()
+    public async Task ReturnsFalseForAPropIsNotOneOfRuleWhenAllPropsMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.properties.negative", TestSetup.Map("", TestSetup.Map("name", "michael", "domain", "prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.properties.negative", new ContextSet { [""] = new ContextProperties { ["name"] = "michael", ["domain"] = "prefab.cloud" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_ENDS_WITH_ONE_OF rule when the given prop has a matching suffix")]
-    public void ReturnsTrueForPropEndsWithOneOfRuleWhenTheGivenPropHasAMatchingSuffix()
+    public async Task ReturnsTrueForPropEndsWithOneOfRuleWhenTheGivenPropHasAMatchingSuffix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.ends-with-one-of.positive", TestSetup.Map("", TestSetup.Map("email", "jeff@prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["email"] = "jeff@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.ends-with-one-of.positive");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_ENDS_WITH_ONE_OF rule when the given prop doesn't have a matching suffix")]
-    public void ReturnsFalseForPropEndsWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSuffix()
+    public async Task ReturnsFalseForPropEndsWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSuffix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.ends-with-one-of.positive", TestSetup.Map("", TestSetup.Map("email", "jeff@test.com")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.ends-with-one-of.positive", new ContextSet { [""] = new ContextProperties { ["email"] = "jeff@test.com" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_DOES_NOT_END_WITH_ONE_OF rule when the given prop doesn't have a matching suffix")]
-    public void ReturnsTrueForPropDoesNotEndWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSuffix()
+    public async Task ReturnsTrueForPropDoesNotEndWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSuffix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.ends-with-one-of.negative", TestSetup.Map("", TestSetup.Map("email", "michael@test.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["email"] = "michael@test.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.ends-with-one-of.negative");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_DOES_NOT_END_WITH_ONE_OF rule when the given prop has a matching suffix")]
-    public void ReturnsFalseForPropDoesNotEndWithOneOfRuleWhenTheGivenPropHasAMatchingSuffix()
+    public async Task ReturnsFalseForPropDoesNotEndWithOneOfRuleWhenTheGivenPropHasAMatchingSuffix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.ends-with-one-of.negative", TestSetup.Map("", TestSetup.Map("email", "michael@prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.ends-with-one-of.negative", new ContextSet { [""] = new ContextProperties { ["email"] = "michael@prefab.cloud" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_STARTS_WITH_ONE_OF rule when the given prop has a matching prefix")]
-    public void ReturnsTrueForPropStartsWithOneOfRuleWhenTheGivenPropHasAMatchingPrefix()
+    public async Task ReturnsTrueForPropStartsWithOneOfRuleWhenTheGivenPropHasAMatchingPrefix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.starts-with-one-of.positive", TestSetup.Map("user", TestSetup.Map("email", "foo@prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "foo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.starts-with-one-of.positive");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_STARTS_WITH_ONE_OF rule when the given prop doesn't have a matching prefix")]
-    public void ReturnsFalseForPropStartsWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingPrefix()
+    public async Task ReturnsFalseForPropStartsWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingPrefix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.starts-with-one-of.positive", TestSetup.Map("user", TestSetup.Map("email", "notfoo@prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "notfoo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.starts-with-one-of.positive");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_DOES_NOT_START_WITH_ONE_OF rule when the given prop doesn't have a matching prefix")]
-    public void ReturnsTrueForPropDoesNotStartWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingPrefix()
+    public async Task ReturnsTrueForPropDoesNotStartWithOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingPrefix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.starts-with-one-of.negative", TestSetup.Map("user", TestSetup.Map("email", "notfoo@prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "notfoo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.starts-with-one-of.negative");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_DOES_NOT_START_WITH_ONE_OF rule when the given prop has a matching prefix")]
-    public void ReturnsFalseForPropDoesNotStartWithOneOfRuleWhenTheGivenPropHasAMatchingPrefix()
+    public async Task ReturnsFalseForPropDoesNotStartWithOneOfRuleWhenTheGivenPropHasAMatchingPrefix()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.starts-with-one-of.negative", TestSetup.Map("user", TestSetup.Map("email", "foo@prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "foo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.starts-with-one-of.negative");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_CONTAINS_ONE_OF rule when the given prop has a matching substring")]
-    public void ReturnsTrueForPropContainsOneOfRuleWhenTheGivenPropHasAMatchingSubstring()
+    public async Task ReturnsTrueForPropContainsOneOfRuleWhenTheGivenPropHasAMatchingSubstring()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.contains-one-of.positive", TestSetup.Map("user", TestSetup.Map("email", "somefoo@prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "somefoo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.contains-one-of.positive");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_CONTAINS_ONE_OF rule when the given prop doesn't have a matching substring")]
-    public void ReturnsFalseForPropContainsOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSubstring()
+    public async Task ReturnsFalseForPropContainsOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSubstring()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.contains-one-of.positive", TestSetup.Map("user", TestSetup.Map("email", "info@prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "info@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.contains-one-of.positive");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_DOES_NOT_CONTAIN_ONE_OF rule when the given prop doesn't have a matching substring")]
-    public void ReturnsTrueForPropDoesNotContainOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSubstring()
+    public async Task ReturnsTrueForPropDoesNotContainOneOfRuleWhenTheGivenPropDoesnTHaveAMatchingSubstring()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.contains-one-of.negative", TestSetup.Map("user", TestSetup.Map("email", "info@prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "info@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.contains-one-of.negative");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_DOES_NOT_CONTAIN_ONE_OF rule when the given prop has a matching substring")]
-    public void ReturnsFalseForPropDoesNotContainOneOfRuleWhenTheGivenPropHasAMatchingSubstring()
+    public async Task ReturnsFalseForPropDoesNotContainOneOfRuleWhenTheGivenPropHasAMatchingSubstring()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.contains-one-of.negative", TestSetup.Map("user", TestSetup.Map("email", "notfoo@prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["email"] = "notfoo@prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.contains-one-of.negative");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for IN_SEG when the segment rule matches")]
-    public void ReturnsTrueForInSegWhenTheSegmentRuleMatches()
+    public async Task ReturnsTrueForInSegWhenTheSegmentRuleMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.positive", TestSetup.Map("user", TestSetup.Map("key", "lauren")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "lauren" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.positive");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for IN_SEG when the segment rule doesn't match")]
-    public void ReturnsFalseForInSegWhenTheSegmentRuleDoesnTMatch()
+    public async Task ReturnsFalseForInSegWhenTheSegmentRuleDoesnTMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.positive", TestSetup.Map("user", TestSetup.Map("key", "josh")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-segment.positive", new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for IN_SEG if any segment rule fails to match")]
-    public void ReturnsFalseForInSegIfAnySegmentRuleFailsToMatch()
+    public async Task ReturnsFalseForInSegIfAnySegmentRuleFailsToMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("user", TestSetup.Map("key", "josh"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for IN_SEG (segment-and) if all rules matches")]
-    public void ReturnsTrueForInSegSegmentAndIfAllRulesMatches()
+    public async Task ReturnsTrueForInSegSegmentAndIfAllRulesMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("user", TestSetup.Map("key", "michael"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-seg.segment-and", new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IN_SEG (segment-or) if any segment rule matches (lookup)")]
-    public void ReturnsTrueForInSegSegmentOrIfAnySegmentRuleMatchesLookup()
+    public async Task ReturnsTrueForInSegSegmentOrIfAnySegmentRuleMatchesLookup()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-or", TestSetup.Map("user", TestSetup.Map("key", "michael"), "", TestSetup.Map("domain", "example.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" }, [""] = new ContextProperties { ["domain"] = "example.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-or");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IN_SEG (segment-or) if any segment rule matches (prop)")]
-    public void ReturnsTrueForInSegSegmentOrIfAnySegmentRuleMatchesProp()
+    public async Task ReturnsTrueForInSegSegmentOrIfAnySegmentRuleMatchesProp()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-or", TestSetup.Map("user", TestSetup.Map("key", "nobody"), "", TestSetup.Map("domain", "gmail.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-seg.segment-or", new ContextSet { ["user"] = new ContextProperties { ["key"] = "nobody" }, [""] = new ContextProperties { ["domain"] = "gmail.com" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for NOT_IN_SEG when the segment rule doesn't match")]
-    public void ReturnsTrueForNotInSegWhenTheSegmentRuleDoesnTMatch()
+    public async Task ReturnsTrueForNotInSegWhenTheSegmentRuleDoesnTMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.negative", TestSetup.Map("user", TestSetup.Map("key", "josh")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.negative");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for NOT_IN_SEG when the segment rule matches")]
-    public void ReturnsFalseForNotInSegWhenTheSegmentRuleMatches()
+    public async Task ReturnsFalseForNotInSegWhenTheSegmentRuleMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.negative", TestSetup.Map("user", TestSetup.Map("key", "michael")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-segment.negative", new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for NOT_IN_SEG if any segment rule matches")]
-    public void ReturnsFalseForNotInSegIfAnySegmentRuleMatches()
+    public async Task ReturnsFalseForNotInSegIfAnySegmentRuleMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.multiple-criteria.negative", TestSetup.Map("user", TestSetup.Map("key", "josh"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.multiple-criteria.negative");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for NOT_IN_SEG if no segment rule matches")]
-    public void ReturnsTrueForNotInSegIfNoSegmentRuleMatches()
+    public async Task ReturnsTrueForNotInSegIfNoSegmentRuleMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-segment.multiple-criteria.negative", TestSetup.Map("user", TestSetup.Map("key", "josh"), "", TestSetup.Map("domain", "something.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-segment.multiple-criteria.negative", new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" }, [""] = new ContextProperties { ["domain"] = "something.com" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for NOT_IN_SEG (segment-and) if not segment rule fails to match")]
-    public void ReturnsTrueForNotInSegSegmentAndIfNotSegmentRuleFailsToMatch()
+    public async Task ReturnsTrueForNotInSegSegmentAndIfNotSegmentRuleFailsToMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.not-in-seg.segment-and", TestSetup.Map("user", TestSetup.Map("key", "josh"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.not-in-seg.segment-and");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IN_SEG (segment-and) if not segment rule fails to match")]
-    public void ReturnsTrueForInSegSegmentAndIfNotSegmentRuleFailsToMatch()
+    public async Task ReturnsTrueForInSegSegmentAndIfNotSegmentRuleFailsToMatch()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("user", TestSetup.Map("key", "josh"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.in-seg.segment-and", new ContextSet { ["user"] = new ContextProperties { ["key"] = "josh" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for NOT_IN_SEG (segment-and) if segment rules matches")]
-    public void ReturnsFalseForNotInSegSegmentAndIfSegmentRulesMatches()
+    public async Task ReturnsFalseForNotInSegSegmentAndIfSegmentRulesMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.not-in-seg.segment-and", TestSetup.Map("user", TestSetup.Map("key", "michael"), "", TestSetup.Map("domain", "prefab.cloud")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.not-in-seg.segment-and");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for NOT_IN_SEG (segment-or) if no segment rule matches")]
-    public void ReturnsTrueForNotInSegSegmentOrIfNoSegmentRuleMatches()
+    public async Task ReturnsTrueForNotInSegSegmentOrIfNoSegmentRuleMatches()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.not-in-seg.segment-or", TestSetup.Map("user", TestSetup.Map("key", "nobody"), "", TestSetup.Map("domain", "example.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.not-in-seg.segment-or", new ContextSet { ["user"] = new ContextProperties { ["key"] = "nobody" }, [""] = new ContextProperties { ["domain"] = "example.com" } });
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for NOT_IN_SEG (segment-or) if one segment rule matches (prop)")]
-    public void ReturnsFalseForNotInSegSegmentOrIfOneSegmentRuleMatchesProp()
+    public async Task ReturnsFalseForNotInSegSegmentOrIfOneSegmentRuleMatchesProp()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.not-in-seg.segment-or", TestSetup.Map("user", TestSetup.Map("key", "nobody"), "", TestSetup.Map("domain", "gmail.com")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "nobody" }, [""] = new ContextProperties { ["domain"] = "gmail.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.not-in-seg.segment-or");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for NOT_IN_SEG (segment-or) if one segment rule matches (lookup)")]
-    public void ReturnsFalseForNotInSegSegmentOrIfOneSegmentRuleMatchesLookup()
+    public async Task ReturnsFalseForNotInSegSegmentOrIfOneSegmentRuleMatchesLookup()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.not-in-seg.segment-or", TestSetup.Map("user", TestSetup.Map("key", "michael"), "", TestSetup.Map("domain", "example.com")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.not-in-seg.segment-or", new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" }, [""] = new ContextProperties { ["domain"] = "example.com" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_BEFORE rule when the given prop represents a date (string) before the rule's time")]
-    public void ReturnsTrueForPropBeforeRuleWhenTheGivenPropRepresentsADateStringBeforeTheRuleSTime()
+    public async Task ReturnsTrueForPropBeforeRuleWhenTheGivenPropRepresentsADateStringBeforeTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before", TestSetup.Map("user", TestSetup.Map("creation_date", "2024-11-01T00:00:00Z")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2024-11-01T00:00:00Z" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_BEFORE rule when the given prop represents a date (number) before the rule's time")]
-    public void ReturnsTrueForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberBeforeTheRuleSTime()
+    public async Task ReturnsTrueForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberBeforeTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before", TestSetup.Map("user", TestSetup.Map("creation_date", 1730419200000L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1730419200000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_BEFORE rule when the given prop represents a date (number) exactly matching rule's time")]
-    public void ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberExactlyMatchingRuleSTime()
+    public async Task ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberExactlyMatchingRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before", TestSetup.Map("user", TestSetup.Map("creation_date", 1733011200000L)));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1733011200000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_BEFORE rule when the given prop represents a date (number) AFTER the rule's time")]
-    public void ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberAfterTheRuleSTime()
+    public async Task ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberAfterTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before", TestSetup.Map("user", TestSetup.Map("creation_date", "2025-01-01T00:00:00Z")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2025-01-01T00:00:00Z" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_BEFORE rule when the given prop won't parse as a date")]
-    public void ReturnsFalseForPropBeforeRuleWhenTheGivenPropWonTParseAsADate()
+    public async Task ReturnsFalseForPropBeforeRuleWhenTheGivenPropWonTParseAsADate()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before", TestSetup.Map("user", TestSetup.Map("creation_date", "not a date")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "not a date" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_BEFORE rule using current-time relative to 2050-01-01")]
-    public void ReturnsFalseForPropBeforeRuleUsingCurrentTimeRelativeTo20500101()
+    public async Task ReturnsFalseForPropBeforeRuleUsingCurrentTimeRelativeTo20500101()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.before.current-time", TestSetup.Map());
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.before.current-time");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_AFTER rule when the given prop represents a date (string) after the rule's time")]
-    public void ReturnsTrueForPropAfterRuleWhenTheGivenPropRepresentsADateStringAfterTheRuleSTime()
+    public async Task ReturnsTrueForPropAfterRuleWhenTheGivenPropRepresentsADateStringAfterTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after", TestSetup.Map("user", TestSetup.Map("creation_date", "2025-01-01T00:00:00Z")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2025-01-01T00:00:00Z" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_AFTER rule when the given prop represents a date (number) after the rule's time")]
-    public void ReturnsTrueForPropAfterRuleWhenTheGivenPropRepresentsADateNumberAfterTheRuleSTime()
+    public async Task ReturnsTrueForPropAfterRuleWhenTheGivenPropRepresentsADateNumberAfterTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after", TestSetup.Map("user", TestSetup.Map("creation_date", 1735689600000L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1735689600000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_AFTER rule when the given prop represents a date (number) exactly matching rule's time")]
-    public void ReturnsFalseForPropAfterRuleWhenTheGivenPropRepresentsADateNumberExactlyMatchingRuleSTime()
+    public async Task ReturnsFalseForPropAfterRuleWhenTheGivenPropRepresentsADateNumberExactlyMatchingRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after", TestSetup.Map("user", TestSetup.Map("creation_date", 1733011200000L)));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1733011200000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_BEFORE rule when the given prop represents a date (number) BEFORE the rule's time")]
-    public void ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberBeforeTheRuleSTime()
+    public async Task ReturnsFalseForPropBeforeRuleWhenTheGivenPropRepresentsADateNumberBeforeTheRuleSTime()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after", TestSetup.Map("user", TestSetup.Map("creation_date", "2024-01-01T00:00:00Z")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2024-01-01T00:00:00Z" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_AFTER rule when the given prop won't parse as a date")]
-    public void ReturnsFalseForPropAfterRuleWhenTheGivenPropWonTParseAsADate()
+    public async Task ReturnsFalseForPropAfterRuleWhenTheGivenPropWonTParseAsADate()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after", TestSetup.Map("user", TestSetup.Map("creation_date", "not a date")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "not a date" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_AFTER rule using current-time relative to 2025-01-01")]
-    public void ReturnsFalseForPropAfterRuleUsingCurrentTimeRelativeTo20250101()
+    public async Task ReturnsFalseForPropAfterRuleUsingCurrentTimeRelativeTo20250101()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.after.current-time", TestSetup.Map());
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.after.current-time");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_LESS_THAN rule when the given prop is less than the rule's value")]
-    public void ReturnsTrueForPropLessThanRuleWhenTheGivenPropIsLessThanTheRuleSValue()
+    public async Task ReturnsTrueForPropLessThanRuleWhenTheGivenPropIsLessThanTheRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than", TestSetup.Map("user", TestSetup.Map("age", 20L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(20L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_LESS_THAN rule when the given prop is less than the rule's value (float)")]
-    public void ReturnsTrueForPropLessThanRuleWhenTheGivenPropIsLessThanTheRuleSValueFloat()
+    public async Task ReturnsTrueForPropLessThanRuleWhenTheGivenPropIsLessThanTheRuleSValueFloat()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than", TestSetup.Map("user", TestSetup.Map("age", 20.5d)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueDouble(20.5d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_LESS_THAN rule when the given prop is equal to rule's value")]
-    public void ReturnsFalseForPropLessThanRuleWhenTheGivenPropIsEqualToRuleSValue()
+    public async Task ReturnsFalseForPropLessThanRuleWhenTheGivenPropIsEqualToRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than", TestSetup.Map("user", TestSetup.Map("age", 30L)));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(30L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_LESS_THAN rule when the given prop a string")]
-    public void ReturnsFalseForPropLessThanRuleWhenTheGivenPropAString()
+    public async Task ReturnsFalseForPropLessThanRuleWhenTheGivenPropAString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than", TestSetup.Map("user", TestSetup.Map("age", "20")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = "20" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_LESS_THAN_OR_EQUAL rule when the given prop is less than the rule's value")]
-    public void ReturnsTrueForPropLessThanOrEqualRuleWhenTheGivenPropIsLessThanTheRuleSValue()
+    public async Task ReturnsTrueForPropLessThanOrEqualRuleWhenTheGivenPropIsLessThanTheRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 20L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(20L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_LESS_THAN_OR_EQUAL rule when the given prop is less than the rule's value (float)")]
-    public void ReturnsTrueForPropLessThanOrEqualRuleWhenTheGivenPropIsLessThanTheRuleSValueFloat()
+    public async Task ReturnsTrueForPropLessThanOrEqualRuleWhenTheGivenPropIsLessThanTheRuleSValueFloat()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 20.5d)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueDouble(20.5d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_LESS_THAN_OR_EQUAL rule when the given prop is equal to rule's value")]
-    public void ReturnsFalseForPropLessThanOrEqualRuleWhenTheGivenPropIsEqualToRuleSValue()
+    public async Task ReturnsFalseForPropLessThanOrEqualRuleWhenTheGivenPropIsEqualToRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 30L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(30L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_LESS_THAN_OR_EQUAL rule when the given prop a string")]
-    public void ReturnsFalseForPropLessThanOrEqualRuleWhenTheGivenPropAString()
+    public async Task ReturnsFalseForPropLessThanOrEqualRuleWhenTheGivenPropAString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.less-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", "20")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = "20" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.less-than-or-equal");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN rule when the given prop is greater than the rule's value")]
-    public void ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSValue()
+    public async Task ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than", TestSetup.Map("user", TestSetup.Map("age", 100L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(100L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN rule when the given prop is greater than the rule's value (float)")]
-    public void ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSValueFloat()
+    public async Task ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSValueFloat()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than", TestSetup.Map("user", TestSetup.Map("age", 30.5d)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueDouble(30.5d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN rule when the given prop is greater than the rule's float value (float)")]
-    public void ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSFloatValueFloat()
+    public async Task ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSFloatValueFloat()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than.double", TestSetup.Map("user", TestSetup.Map("age", 32.7d)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueDouble(32.7d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than.double");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN rule when the given prop is greater than the rule's float value (integer)")]
-    public void ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSFloatValueInteger()
+    public async Task ReturnsTrueForPropGreaterThanRuleWhenTheGivenPropIsGreaterThanTheRuleSFloatValueInteger()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than.double", TestSetup.Map("user", TestSetup.Map("age", 32L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(32L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than.double");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_GREATER_THAN rule when the given prop is equal to rule's value")]
-    public void ReturnsFalseForPropGreaterThanRuleWhenTheGivenPropIsEqualToRuleSValue()
+    public async Task ReturnsFalseForPropGreaterThanRuleWhenTheGivenPropIsEqualToRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than", TestSetup.Map("user", TestSetup.Map("age", 30L)));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(30L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_GREATER_THAN rule when the given prop a string")]
-    public void ReturnsFalseForPropGreaterThanRuleWhenTheGivenPropAString()
+    public async Task ReturnsFalseForPropGreaterThanRuleWhenTheGivenPropAString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than", TestSetup.Map("user", TestSetup.Map("age", "100")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = "100" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN_OR_EQUAL rule when the given prop is greater than the rule's value")]
-    public void ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsGreaterThanTheRuleSValue()
+    public async Task ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsGreaterThanTheRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 30L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(30L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN_OR_EQUAL rule when the given prop is greater than the rule's value (float)")]
-    public void ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsGreaterThanTheRuleSValueFloat()
+    public async Task ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsGreaterThanTheRuleSValueFloat()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 30.5d)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueDouble(30.5d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_GREATER_THAN_OR_EQUAL rule when the given prop is equal to rule's value")]
-    public void ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsEqualToRuleSValue()
+    public async Task ReturnsTrueForPropGreaterThanOrEqualRuleWhenTheGivenPropIsEqualToRuleSValue()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", 30L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = new ContextValueLong(30L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than-or-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_GREATER_THAN_OR_EQUAL rule when the given prop a string")]
-    public void ReturnsFalseForPropGreaterThanOrEqualRuleWhenTheGivenPropAString()
+    public async Task ReturnsFalseForPropGreaterThanOrEqualRuleWhenTheGivenPropAString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.greater-than-or-equal", TestSetup.Map("user", TestSetup.Map("age", "100")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = "100" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than-or-equal");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_MATCHES rule when the given prop matches the regex")]
-    public void ReturnsTrueForPropMatchesRuleWhenTheGivenPropMatchesTheRegex()
+    public async Task ReturnsTrueForPropMatchesRuleWhenTheGivenPropMatchesTheRegex()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.matches", TestSetup.Map("user", TestSetup.Map("code", "aaaaaab")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "aaaaaab" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_MATCHES rule when the given prop does not match the regex")]
-    public void ReturnsFalseForPropMatchesRuleWhenTheGivenPropDoesNotMatchTheRegex()
+    public async Task ReturnsFalseForPropMatchesRuleWhenTheGivenPropDoesNotMatchTheRegex()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.matches", TestSetup.Map("user", TestSetup.Map("code", "aa")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "aa" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_DOES_NOT_MATCH rule when the given prop does not match the regex")]
-    public void ReturnsTrueForPropDoesNotMatchRuleWhenTheGivenPropDoesNotMatchTheRegex()
+    public async Task ReturnsTrueForPropDoesNotMatchRuleWhenTheGivenPropDoesNotMatchTheRegex()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.does-not-match", TestSetup.Map("user", TestSetup.Map("code", "b")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "b" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH rule when the given prop matches the regex")]
-    public void ReturnsFalseForPropDoesNotMatchRuleWhenTheGivenPropMatchesTheRegex()
+    public async Task ReturnsFalseForPropDoesNotMatchRuleWhenTheGivenPropMatchesTheRegex()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.does-not-match", TestSetup.Map("user", TestSetup.Map("code", "aabb")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "aabb" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_PRESENT rule when the given prop is a non-empty string")]
-    public void ReturnsTrueForIsPresentRuleWhenTheGivenPropIsANonEmptyString()
+    public async Task ReturnsTrueForIsPresentRuleWhenTheGivenPropIsANonEmptyString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("id", "abc")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = "abc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_PRESENT rule when the given prop is an empty string")]
-    public void ReturnsTrueForIsPresentRuleWhenTheGivenPropIsAnEmptyString()
+    public async Task ReturnsTrueForIsPresentRuleWhenTheGivenPropIsAnEmptyString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("id", "")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = "" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_PRESENT rule when the given prop is the integer zero")]
-    public void ReturnsTrueForIsPresentRuleWhenTheGivenPropIsTheIntegerZero()
+    public async Task ReturnsTrueForIsPresentRuleWhenTheGivenPropIsTheIntegerZero()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("id", 0L)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = new ContextValueLong(0L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_PRESENT rule when the given prop is boolean false")]
-    public void ReturnsTrueForIsPresentRuleWhenTheGivenPropIsBooleanFalse()
+    public async Task ReturnsTrueForIsPresentRuleWhenTheGivenPropIsBooleanFalse()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("id", false)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = false } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_PRESENT rule when the given prop is null")]
-    public void ReturnsFalseForIsPresentRuleWhenTheGivenPropIsNull()
+    public async Task ReturnsFalseForIsPresentRuleWhenTheGivenPropIsNull()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("id", null)));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties() });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_PRESENT rule when the given prop key is missing from the context")]
-    public void ReturnsFalseForIsPresentRuleWhenTheGivenPropKeyIsMissingFromTheContext()
+    public async Task ReturnsFalseForIsPresentRuleWhenTheGivenPropKeyIsMissingFromTheContext()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map("user", TestSetup.Map("name", "bob")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["name"] = "bob" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_PRESENT rule when no contexts are provided at all")]
-    public void ReturnsFalseForIsPresentRuleWhenNoContextsAreProvidedAtAll()
+    public async Task ReturnsFalseForIsPresentRuleWhenNoContextsAreProvidedAtAll()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present", TestSetup.Map());
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("feature-flag.is-present");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_NOT_PRESENT rule when the given prop is a non-empty string")]
-    public void ReturnsFalseForIsNotPresentRuleWhenTheGivenPropIsANonEmptyString()
+    public async Task ReturnsFalseForIsNotPresentRuleWhenTheGivenPropIsANonEmptyString()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-not-present", TestSetup.Map("user", TestSetup.Map("id", "abc")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = "abc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-not-present");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_NOT_PRESENT rule when the given prop is null")]
-    public void ReturnsTrueForIsNotPresentRuleWhenTheGivenPropIsNull()
+    public async Task ReturnsTrueForIsNotPresentRuleWhenTheGivenPropIsNull()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-not-present", TestSetup.Map("user", TestSetup.Map("id", null)));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties() });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-not-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_NOT_PRESENT rule when the given prop key is missing from the context")]
-    public void ReturnsTrueForIsNotPresentRuleWhenTheGivenPropKeyIsMissingFromTheContext()
+    public async Task ReturnsTrueForIsNotPresentRuleWhenTheGivenPropKeyIsMissingFromTheContext()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-not-present", TestSetup.Map("user", TestSetup.Map("name", "bob")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["name"] = "bob" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-not-present");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for IS_PRESENT rule on a nested path when the nested prop is set")]
-    public void ReturnsTrueForIsPresentRuleOnANestedPathWhenTheNestedPropIsSet()
+    public async Task ReturnsTrueForIsPresentRuleOnANestedPathWhenTheNestedPropIsSet()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present-nested", TestSetup.Map("organization", TestSetup.Map("domain", "example.com")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["organization"] = new ContextProperties { ["domain"] = "example.com" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present-nested");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_PRESENT rule on a nested path when the nested key is missing but the parent context exists")]
-    public void ReturnsFalseForIsPresentRuleOnANestedPathWhenTheNestedKeyIsMissingButTheParentContextExists()
+    public async Task ReturnsFalseForIsPresentRuleOnANestedPathWhenTheNestedKeyIsMissingButTheParentContextExists()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present-nested", TestSetup.Map("organization", TestSetup.Map("name", "Acme Inc")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["organization"] = new ContextProperties { ["name"] = "Acme Inc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present-nested");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for IS_PRESENT rule on a nested path when the parent context is entirely absent")]
-    public void ReturnsFalseForIsPresentRuleOnANestedPathWhenTheParentContextIsEntirelyAbsent()
+    public async Task ReturnsFalseForIsPresentRuleOnANestedPathWhenTheParentContextIsEntirelyAbsent()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.is-present-nested", TestSetup.Map("user", TestSetup.Map("id", "abc")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["id"] = "abc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-present-nested");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_SEMVER_EQUAL rule when the given prop equals the version")]
-    public void ReturnsTrueForPropSemverEqualRuleWhenTheGivenPropEqualsTheVersion()
+    public async Task ReturnsTrueForPropSemverEqualRuleWhenTheGivenPropEqualsTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-equal", TestSetup.Map("app", TestSetup.Map("version", "2.0.0")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL rule when the given prop does not equal the version")]
-    public void ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropDoesNotEqualTheVersion()
+    public async Task ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropDoesNotEqualTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-equal", TestSetup.Map("app", TestSetup.Map("version", "2.0.1")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL rule when the given prop is not a valid semver")]
-    public void ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropIsNotAValidSemver()
+    public async Task ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropIsNotAValidSemver()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-equal", TestSetup.Map("app", TestSetup.Map("version", "2.0")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_SEMVER_LESS_THAN rule when the given prop is less than 2.0.0")]
-    public void ReturnsTrueForPropSemverLessThanRuleWhenTheGivenPropIsLessThan200()
+    public async Task ReturnsTrueForPropSemverLessThanRuleWhenTheGivenPropIsLessThan200()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-less-than", TestSetup.Map("app", TestSetup.Map("version", "1.5.1")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "1.5.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-less-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_LESS_THAN rule when the given prop equals the version")]
-    public void ReturnsFalseForPropSemverLessThanRuleWhenTheGivenPropEqualsTheVersion()
+    public async Task ReturnsFalseForPropSemverLessThanRuleWhenTheGivenPropEqualsTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-less-than", TestSetup.Map("app", TestSetup.Map("version", "2.0.0")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-less-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_LESS_THAN rule when the given prop is greater than the version")]
-    public void ReturnsFalseForPropSemverLessThanRuleWhenTheGivenPropIsGreaterThanTheVersion()
+    public async Task ReturnsFalseForPropSemverLessThanRuleWhenTheGivenPropIsGreaterThanTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-less-than", TestSetup.Map("app", TestSetup.Map("version", "2.2.1")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.2.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-less-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_SEMVER_GREATER_THAN rule when the given prop is greater than 2.0.0")]
-    public void ReturnsTrueForPropSemverGreaterThanRuleWhenTheGivenPropIsGreaterThan200()
+    public async Task ReturnsTrueForPropSemverGreaterThanRuleWhenTheGivenPropIsGreaterThan200()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-greater-than", TestSetup.Map("app", TestSetup.Map("version", "2.5.1")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.5.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-greater-than");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_GREATER_THAN rule when the given prop equals the version")]
-    public void ReturnsFalseForPropSemverGreaterThanRuleWhenTheGivenPropEqualsTheVersion()
+    public async Task ReturnsFalseForPropSemverGreaterThanRuleWhenTheGivenPropEqualsTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-greater-than", TestSetup.Map("app", TestSetup.Map("version", "2.0.0")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-greater-than");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL rule when the given prop is less than the version")]
-    public void ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropIsLessThanTheVersion()
+    public async Task ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropIsLessThanTheVersion()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.semver-greater-than", TestSetup.Map("app", TestSetup.Map("version", "0.0.5")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "0.0.5" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-greater-than");
+        Assert.False(actual);
     }
 }

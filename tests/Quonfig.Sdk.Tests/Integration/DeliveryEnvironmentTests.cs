@@ -26,19 +26,18 @@ public sealed class DeliveryEnvironmentTests
                 .WithHeader("ETag", "\"v1\"")
                 .WithBody("{\"meta\":{\"version\":\"v1\",\"environment\":\"development\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}"));
 
-        await using var client = new Quonfig(new QuonfigOptions
+        await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             SdkKey = "sdk-test",
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
-            CollectEvaluationSummaries = false,
-            ContextUploadMode = ContextUploadMode.None,
         });
         await client.InitAsync();
 
-        Assert.Equal(false, client.GetBool("flag.env-scoped"));
+        var actual = client.GetBool("flag.env-scoped");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "explicit environment pin is ignored in delivery mode (meta.environment authoritative)")]
@@ -52,7 +51,7 @@ public sealed class DeliveryEnvironmentTests
                 .WithHeader("ETag", "\"v1\"")
                 .WithBody("{\"meta\":{\"version\":\"v1\",\"environment\":\"development\"},\"configs\":[{\"id\":\"c-env\",\"key\":\"flag.env-scoped\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]},\"environment\":{\"id\":\"development\",\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":false}}]}}]}"));
 
-        await using var client = new Quonfig(new QuonfigOptions
+        await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             SdkKey = "sdk-test",
             ApiUrls = new[] { server.Urls[0] },
@@ -60,12 +59,11 @@ public sealed class DeliveryEnvironmentTests
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
             Environment = "staging",
-            CollectEvaluationSummaries = false,
-            ContextUploadMode = ContextUploadMode.None,
         });
         await client.InitAsync();
 
-        Assert.Equal(false, client.GetBool("flag.env-scoped"));
+        var actual = client.GetBool("flag.env-scoped");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "config without environment block falls back to default in delivery mode")]
@@ -79,18 +77,17 @@ public sealed class DeliveryEnvironmentTests
                 .WithHeader("ETag", "\"v1\"")
                 .WithBody("{\"meta\":{\"version\":\"v1\",\"environment\":\"development\"},\"configs\":[{\"id\":\"c-def\",\"key\":\"flag.default-only\",\"type\":\"bool\",\"valueType\":\"bool\",\"sendToClientSdk\":false,\"default\":{\"rules\":[{\"criteria\":[{\"operator\":\"ALWAYS_TRUE\"}],\"value\":{\"type\":\"bool\",\"value\":true}}]}}]}"));
 
-        await using var client = new Quonfig(new QuonfigOptions
+        await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             SdkKey = "sdk-test",
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(5),
-            CollectEvaluationSummaries = false,
-            ContextUploadMode = ContextUploadMode.None,
         });
         await client.InitAsync();
 
-        Assert.Equal(true, client.GetBool("flag.default-only"));
+        var actual = client.GetBool("flag.default-only");
+        Assert.True(actual);
     }
 }

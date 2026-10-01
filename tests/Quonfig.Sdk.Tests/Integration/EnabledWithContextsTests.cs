@@ -3,66 +3,132 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class EnabledWithContextsTests
+public sealed class EnabledWithContextsTests
 {
 
     [Fact(DisplayName = "returns true from global context")]
-    public void ReturnsTrueFromGlobalContext()
+    public async Task ReturnsTrueFromGlobalContext()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "prefab.cloud"), "user", TestSetup.Map("key", "michael")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "prefab.cloud" }, ["user"] = new ContextProperties { ["key"] = "michael" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false due to local context override")]
-    public void ReturnsFalseDueToLocalContextOverride()
+    public async Task ReturnsFalseDueToLocalContextOverride()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "prefab.cloud"), "user", TestSetup.Map("key", "james")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "prefab.cloud" }, ["user"] = new ContextProperties { ["key"] = "michael" } })
+            .WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "james" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false for untouched scope context")]
-    public void ReturnsFalseForUntouchedScopeContext()
+    public async Task ReturnsFalseForUntouchedScopeContext()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "example.com"), "user", TestSetup.Map("key", "nobody")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "example.com" }, ["user"] = new ContextProperties { ["key"] = "nobody" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false due to partial scope context override of user.key")]
-    public void ReturnsFalseDueToPartialScopeContextOverrideOfUserKey()
+    public async Task ReturnsFalseDueToPartialScopeContextOverrideOfUserKey()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "example.com"), "user", TestSetup.Map("key", "michael")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "example.com" }, ["user"] = new ContextProperties { ["key"] = "nobody" } })
+            .WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns false due to partial scope context override of domain")]
-    public void ReturnsFalseDueToPartialScopeContextOverrideOfDomain()
+    public async Task ReturnsFalseDueToPartialScopeContextOverrideOfDomain()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "example.com", "key", "prefab.cloud"), "user", TestSetup.Map("key", "nobody")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "example.com" }, ["user"] = new ContextProperties { ["key"] = "nobody" } })
+            .WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true due to local override of domain when scope user.key already matches")]
+    public async Task ReturnsTrueDueToLocalOverrideOfDomainWhenScopeUserKeyAlreadyMatches()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "example.com" }, ["user"] = new ContextProperties { ["key"] = "michael" } })
+            .WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true due to full scope context override of user.key and domain")]
-    public void ReturnsTrueDueToFullScopeContextOverrideOfUserKeyAndDomain()
+    public async Task ReturnsTrueDueToFullScopeContextOverrideOfUserKeyAndDomain()
     {
-        object? actual = TestSetup.EnabledCase("feature-flag.in-seg.segment-and", TestSetup.Map("", TestSetup.Map("domain", "prefab.cloud"), "user", TestSetup.Map("key", "michael")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { [""] = new ContextProperties { ["domain"] = "example.com" }, ["user"] = new ContextProperties { ["key"] = "nobody" } })
+            .WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" }, [""] = new ContextProperties { ["domain"] = "prefab.cloud" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-seg.segment-and");
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns false for rule with different case on context property name")]
-    public void ReturnsFalseForRuleWithDifferentCaseOnContextPropertyName()
+    public async Task ReturnsFalseForRuleWithDifferentCaseOnContextPropertyName()
     {
-        object? actual = TestSetup.EnabledCase("mixed.case.property.name", TestSetup.Map("user", TestSetup.Map("IsHuman", "verified")));
-        Assert.Equal(false, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("mixed.case.property.name", new ContextSet { ["user"] = new ContextProperties { ["IsHuman"] = "verified" } });
+        Assert.False(actual);
     }
 
     [Fact(DisplayName = "returns true for matching case on context property name")]
-    public void ReturnsTrueForMatchingCaseOnContextPropertyName()
+    public async Task ReturnsTrueForMatchingCaseOnContextPropertyName()
     {
-        object? actual = TestSetup.EnabledCase("mixed.case.property.name", TestSetup.Map("user", TestSetup.Map("isHuman", "verified")));
-        Assert.Equal(true, actual);
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("mixed.case.property.name", new ContextSet { ["user"] = new ContextProperties { ["isHuman"] = "verified" } });
+        Assert.True(actual);
     }
 }

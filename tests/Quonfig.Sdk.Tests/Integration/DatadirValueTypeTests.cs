@@ -3,26 +3,38 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class DatadirValueTypeTests
+public sealed class DatadirValueTypeTests
 {
 
     [Fact(DisplayName = "datadir int config value is loaded as a number, not a string")]
-    public void DatadirIntConfigValueIsLoadedAsANumberNotAString()
+    public async Task DatadirIntConfigValueIsLoadedAsANumberNotAString()
     {
-        object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "brand.new.int");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = "Production",
+        });
+        var actual = client.GetLong("brand.new.int");
         Assert.Equal(123L, actual);
-        TestSetup.AssertRawValueNumeric(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "brand.new.int");
+        TestSetup.AssertLoadedValueNumeric("Production", "brand.new.int");
     }
 
     [Fact(DisplayName = "datadir double config value is loaded as a number, not a string")]
-    public void DatadirDoubleConfigValueIsLoadedAsANumberNotAString()
+    public async Task DatadirDoubleConfigValueIsLoadedAsANumberNotAString()
     {
-        object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "my-double-key");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = "Production",
+        });
+        var actual = client.GetDouble("my-double-key");
         TestSetup.AssertDoubleEquals(9.95d, actual);
-        TestSetup.AssertRawValueNumeric(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "my-double-key");
+        TestSetup.AssertLoadedValueNumeric("Production", "my-double-key");
     }
 }

@@ -4,56 +4,83 @@
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
 using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class DatadirEnvironmentTests
+public sealed class DatadirEnvironmentTests
 {
 
     [Fact(DisplayName = "datadir with environment option gets environment-specific value")]
-    public void DatadirWithEnvironmentOptionGetsEnvironmentSpecificValue()
+    public async Task DatadirWithEnvironmentOptionGetsEnvironmentSpecificValue()
     {
-        object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "james.test.key");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = "Production",
+        });
+        var actual = client.GetString("james.test.key");
         Assert.Equal("test4", actual);
     }
 
     [Fact(DisplayName = "datadir with QUONFIG_ENVIRONMENT env var gets environment-specific value")]
-    public void DatadirWithQuonfigEnvironmentEnvVarGetsEnvironmentSpecificValue()
+    public async Task DatadirWithQuonfigEnvironmentEnvVarGetsEnvironmentSpecificValue()
     {
-        TestSetup.WithEnv(TestSetup.Map("QUONFIG_ENVIRONMENT", "Production"), () =>
+        using var env = TestSetup.Env("QUONFIG_ENVIRONMENT", "Production");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
         {
-            object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR), "james.test.key");
-            Assert.Equal("test4", actual);
+            Datadir = TestSetup.DATADIR,
         });
+        var actual = client.GetString("james.test.key");
+        Assert.Equal("test4", actual);
     }
 
     [Fact(DisplayName = "environment option supersedes QUONFIG_ENVIRONMENT env var")]
-    public void EnvironmentOptionSupersedesQuonfigEnvironmentEnvVar()
+    public async Task EnvironmentOptionSupersedesQuonfigEnvironmentEnvVar()
     {
-        TestSetup.WithEnv(TestSetup.Map("QUONFIG_ENVIRONMENT", "nonexistent"), () =>
+        using var env = TestSetup.Env("QUONFIG_ENVIRONMENT", "nonexistent");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
         {
-            object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "james.test.key");
-            Assert.Equal("test4", actual);
+            Datadir = TestSetup.DATADIR,
+            Environment = "Production",
         });
+        var actual = client.GetString("james.test.key");
+        Assert.Equal("test4", actual);
     }
 
     [Fact(DisplayName = "config without environment override returns default value")]
-    public void ConfigWithoutEnvironmentOverrideReturnsDefaultValue()
+    public async Task ConfigWithoutEnvironmentOverrideReturnsDefaultValue()
     {
-        object? actual = TestSetup.DatadirGet(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "Production"), "config.with.only.default.env.row");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = "Production",
+        });
+        var actual = client.GetString("config.with.only.default.env.row");
         Assert.Equal("hello from no env row", actual);
     }
 
     [Fact(DisplayName = "datadir without environment fails to init")]
-    public void DatadirWithoutEnvironmentFailsToInit()
+    public async Task DatadirWithoutEnvironmentFailsToInit()
     {
-        Assert.Throws<InvalidOperationException>(() => TestSetup.DatadirClient(TestSetup.Map("datadir", TestSetup.DATADIR)));
+        var options = new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+        };
+        Assert.Throws<InvalidOperationException>(() => TestSetup.NewClient(options));
+        await Task.CompletedTask;
     }
 
     [Fact(DisplayName = "datadir with invalid environment fails to init")]
-    public void DatadirWithInvalidEnvironmentFailsToInit()
+    public async Task DatadirWithInvalidEnvironmentFailsToInit()
     {
-        Assert.Throws<InvalidOperationException>(() => TestSetup.DatadirClient(TestSetup.Map("datadir", TestSetup.DATADIR, "environment", "nonexistent")));
+        var options = new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = "nonexistent",
+        };
+        Assert.Throws<InvalidOperationException>(() => TestSetup.NewClient(options));
+        await Task.CompletedTask;
     }
 }

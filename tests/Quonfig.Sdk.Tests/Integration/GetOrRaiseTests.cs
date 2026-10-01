@@ -3,58 +3,203 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Quonfig.Sdk.Exceptions;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class GetOrRaiseTests
+public sealed class GetOrRaiseTests
 {
 
     [Fact(DisplayName = "get_or_raise can raise an error if value not found")]
-    public void GetOrRaiseCanRaiseAnErrorIfValueNotFound()
+    public async Task GetOrRaiseCanRaiseAnErrorIfValueNotFound()
     {
-        Assert.Throws<QuonfigKeyNotFoundException>(() =>
-            TestSetup.RunRaiseCase("my-missing-key", TestSetup.Map(), "missing_default"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigKeyNotFoundException>(() => client.GetString("my-missing-key"));
     }
 
     [Fact(DisplayName = "get_or_raise returns a default value instead of raising")]
-    public void GetOrRaiseReturnsADefaultValueInsteadOfRaising()
+    public async Task GetOrRaiseReturnsADefaultValueInsteadOfRaising()
     {
-        object? actual = TestSetup.GetCase("my-missing-key", TestSetup.Map(), "DEFAULT");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("my-missing-key", defaultValue: "DEFAULT");
         Assert.Equal("DEFAULT", actual);
     }
 
     [Fact(DisplayName = "get_or_raise raises the correct error if it doesn't raise on init timeout")]
-    public void GetOrRaiseRaisesTheCorrectErrorIfItDoesnTRaiseOnInitTimeout()
+    public async Task GetOrRaiseRaisesTheCorrectErrorIfItDoesnTRaiseOnInitTimeout()
     {
-        TestSetup.AssertClientConstructionRaises<QuonfigKeyNotFoundException>("any-key", 0.01d, "https://app.staging-prefab.cloud", "return", "get_or_raise");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "integration-tests",
+            ApiUrls = new[] { "https://app.staging-prefab.cloud" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(10),
+            OnInitFailure = OnInitFailure.ReturnDefaults,
+        });
+        await client.InitAsync();
+        Assert.Throws<QuonfigKeyNotFoundException>(() => client.GetString("any-key"));
     }
 
     [Fact(DisplayName = "get_or_raise can raise an error if the client does not initialize in time")]
-    public void GetOrRaiseCanRaiseAnErrorIfTheClientDoesNotInitializeInTime()
+    public async Task GetOrRaiseCanRaiseAnErrorIfTheClientDoesNotInitializeInTime()
     {
-        TestSetup.AssertInitializationTimeoutError("any-key", 0.01d, "https://app.staging-prefab.cloud", "raise");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "integration-tests",
+            ApiUrls = new[] { "https://app.staging-prefab.cloud" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(10),
+            OnInitFailure = OnInitFailure.Throw,
+        });
+        await Assert.ThrowsAsync<QuonfigInitTimeoutException>(() => client.InitAsync());
     }
 
     [Fact(DisplayName = "raises an error if a config is provided by a missing environment variable")]
-    public void RaisesAnErrorIfAConfigIsProvidedByAMissingEnvironmentVariable()
+    public async Task RaisesAnErrorIfAConfigIsProvidedByAMissingEnvironmentVariable()
     {
-        Assert.Throws<QuonfigEnvVarNotSetException>(() =>
-            TestSetup.RunRaiseCase("provided.by.missing.env.var", TestSetup.Map(), "missing_env_var"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigEnvVarNotSetException>(() => client.GetString("provided.by.missing.env.var"));
     }
 
     [Fact(DisplayName = "raises an error if an env-var-provided config cannot be coerced to configured type")]
-    public void RaisesAnErrorIfAnEnvVarProvidedConfigCannotBeCoercedToConfiguredType()
+    public async Task RaisesAnErrorIfAnEnvVarProvidedConfigCannotBeCoercedToConfiguredType()
     {
-        Assert.Throws<QuonfigKeyNotFoundException>(() =>
-            TestSetup.RunRaiseCase("provided.not.a.number", TestSetup.Map(), "unable_to_coerce_env_var"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetLong("provided.not.a.number"));
     }
 
     [Fact(DisplayName = "raises an error for decryption failure")]
-    public void RaisesAnErrorForDecryptionFailure()
+    public async Task RaisesAnErrorForDecryptionFailure()
     {
-        Assert.Throws<QuonfigDecryptionException>(() =>
-            TestSetup.RunRaiseCase("a.broken.secret.config", TestSetup.Map(), "unable_to_decrypt"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigDecryptionException>(() => client.GetString("a.broken.secret.config"));
+    }
+
+    [Fact(DisplayName = "raises an error if an env-var-provided duration 30s cannot be coerced")]
+    public async Task RaisesAnErrorIfAnEnvVarProvidedDuration30sCannotBeCoerced()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_DURATION_30S", "30s");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("provided.duration.malformed.30s"));
+    }
+
+    [Fact(DisplayName = "raises an error if an env-var-provided duration PT0.5H cannot be coerced")]
+    public async Task RaisesAnErrorIfAnEnvVarProvidedDurationPt05hCannotBeCoerced()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_DURATION_PT0_5H", "PT0.5H");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("provided.duration.malformed.PT0.5H"));
+    }
+
+    [Fact(DisplayName = "raises an error if an env-var-provided duration P1DT cannot be coerced")]
+    public async Task RaisesAnErrorIfAnEnvVarProvidedDurationP1dtCannotBeCoerced()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_DURATION_P1DT", "P1DT");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("provided.duration.malformed.P1DT"));
+    }
+
+    [Fact(DisplayName = "raises an error if an env-var-provided duration garbage cannot be coerced")]
+    public async Task RaisesAnErrorIfAnEnvVarProvidedDurationGarbageCannotBeCoerced()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_DURATION_GARBAGE", "garbage");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("provided.duration.malformed.garbage"));
+    }
+
+    [Fact(DisplayName = "raises an error if a stored duration 30s cannot be coerced")]
+    public async Task RaisesAnErrorIfAStoredDuration30sCannotBeCoerced()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.30s"));
+    }
+
+    [Fact(DisplayName = "raises an error if a stored duration PT0.5H cannot be coerced")]
+    public async Task RaisesAnErrorIfAStoredDurationPt05hCannotBeCoerced()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.PT0.5H"));
+    }
+
+    [Fact(DisplayName = "raises an error if a stored duration P1DT cannot be coerced")]
+    public async Task RaisesAnErrorIfAStoredDurationP1dtCannotBeCoerced()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.P1DT"));
+    }
+
+    [Fact(DisplayName = "raises an error if a stored duration garbage cannot be coerced")]
+    public async Task RaisesAnErrorIfAStoredDurationGarbageCannotBeCoerced()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.garbage"));
+    }
+
+    [Fact(DisplayName = "raises an error if a stored duration empty cannot be coerced")]
+    public async Task RaisesAnErrorIfAStoredDurationEmptyCannotBeCoerced()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.empty"));
     }
 }

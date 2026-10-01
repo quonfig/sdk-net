@@ -3,24 +3,36 @@
 //   cd integration-test-data/generators && npm run generate -- --target=dotnet
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
+using System;
+using System.Threading.Tasks;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
 
-public class GetFeatureFlagTests
+public sealed class GetFeatureFlagTests
 {
 
     [Fact(DisplayName = "get returns the underlying value for a feature flag")]
-    public void GetReturnsTheUnderlyingValueForAFeatureFlag()
+    public async Task GetReturnsTheUnderlyingValueForAFeatureFlag()
     {
-        object? actual = TestSetup.ResolveCase("feature-flag.integer", TestSetup.Map());
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetLong("feature-flag.integer");
         Assert.Equal(3L, actual);
     }
 
     [Fact(DisplayName = "get returns the underlying value for a feature flag that matches the highest precedent rule")]
-    public void GetReturnsTheUnderlyingValueForAFeatureFlagThatMatchesTheHighestPrecedentRule()
+    public async Task GetReturnsTheUnderlyingValueForAFeatureFlagThatMatchesTheHighestPrecedentRule()
     {
-        object? actual = TestSetup.ResolveCase("feature-flag.integer", TestSetup.Map("user", TestSetup.Map("key", "michael")));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetLong("feature-flag.integer", new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
         Assert.Equal(5L, actual);
     }
 }
