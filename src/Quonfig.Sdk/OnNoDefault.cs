@@ -6,7 +6,11 @@ namespace Quonfig.Sdk;
 /// </summary>
 public enum OnNoDefault
 {
-    /// <summary>Throw <see cref="Exceptions.QuonfigKeyNotFoundException"/> (default — fail loud).</summary>
+    /// <summary>
+    /// Throw <see cref="Exceptions.QuonfigKeyNotFoundException"/> (default — fail loud). A value that
+    /// exists but cannot be resolved throws <see cref="Exceptions.QuonfigEnvVarNotSetException"/>,
+    /// <see cref="Exceptions.QuonfigCoercionException"/> or <see cref="Exceptions.QuonfigDecryptionException"/>.
+    /// </summary>
     Throw,
 
     /// <summary>Log a warning and return <c>default(T)</c> / <c>null</c>.</summary>

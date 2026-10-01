@@ -60,6 +60,11 @@ public sealed class Quonfig : IQuonfig
     // context (qfg-9dxb.8). One warning per key per client; bounded by the number of flags.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _hashPropertyMissingWarned =
         new(StringComparer.Ordinal);
+
+    // Config keys already warned about a value that could not be resolved (ENV_VAR not set or not
+    // coercible, decryption failure; qfg-2agi.17). One warning per key per client.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _resolveErrorWarned =
+        new(StringComparer.Ordinal);
     private string? _effectiveEnvironment;
 
     /// <summary>
@@ -146,7 +151,7 @@ public sealed class Quonfig : IQuonfig
     /// <summary>
     /// Runtime telemetry pipeline (qfg-gxm6). Non-null only when telemetry is enabled AND a sender
     /// resolves (delivery mode with an SDK key, or an injected <see cref="QuonfigOptions.TelemetrySender"/>).
-    /// The collectors are fed at the evaluation call sites in <see cref="TypedDetailsRaw{T}"/>; the
+    /// The collectors are fed at the evaluation call sites in <c>TypedDetailsRaw</c>; the
     /// reporter periodically drains them (plus <see cref="_failover"/>) and posts to api-telemetry,
     /// and flushes once more on <see cref="CloseAsync"/>. Mirrors sdk-java's client-owned reporter
     /// lifecycle. Datadir/datafile clients construct none of this and emit no runtime telemetry.
@@ -498,35 +503,35 @@ public sealed class Quonfig : IQuonfig
 
     /// <inheritdoc/>
     public EvaluationDetails<string?> GetStringDetails(string key, ContextSet? contexts = null, string? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<string?>(key, contexts, defaultValue, EvalValueType.String, CoerceString));
+        Resolved(key, defaultValue, TypedDetailsRaw<string?>(key, contexts, defaultValue, EvalValueType.String, CoerceString, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<int?> GetIntDetails(string key, ContextSet? contexts = null, int? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<int?>(key, contexts, defaultValue, EvalValueType.Int, CoerceInt));
+        Resolved(key, defaultValue, TypedDetailsRaw<int?>(key, contexts, defaultValue, EvalValueType.Int, CoerceInt, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<long?> GetLongDetails(string key, ContextSet? contexts = null, long? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<long?>(key, contexts, defaultValue, EvalValueType.Int, CoerceLong));
+        Resolved(key, defaultValue, TypedDetailsRaw<long?>(key, contexts, defaultValue, EvalValueType.Int, CoerceLong, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<bool?> GetBoolDetails(string key, ContextSet? contexts = null, bool? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<bool?>(key, contexts, defaultValue, EvalValueType.Bool, CoerceBoolNullable));
+        Resolved(key, defaultValue, TypedDetailsRaw<bool?>(key, contexts, defaultValue, EvalValueType.Bool, CoerceBoolNullable, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<double?> GetDoubleDetails(string key, ContextSet? contexts = null, double? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<double?>(key, contexts, defaultValue, EvalValueType.Double, CoerceDouble));
+        Resolved(key, defaultValue, TypedDetailsRaw<double?>(key, contexts, defaultValue, EvalValueType.Double, CoerceDouble, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<IReadOnlyList<string>?> GetStringListDetails(string key, ContextSet? contexts = null, IReadOnlyList<string>? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<IReadOnlyList<string>?>(key, contexts, defaultValue, EvalValueType.StringList, CoerceStringList));
+        Resolved(key, defaultValue, TypedDetailsRaw<IReadOnlyList<string>?>(key, contexts, defaultValue, EvalValueType.StringList, CoerceStringList, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<object?> GetJsonDetails(string key, ContextSet? contexts = null, object? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<object?>(key, contexts, defaultValue, EvalValueType.Json, CoerceJson));
+        Resolved(key, defaultValue, TypedDetailsRaw<object?>(key, contexts, defaultValue, EvalValueType.Json, CoerceJson, out var resolveError), resolveError);
 
     /// <inheritdoc/>
     public EvaluationDetails<TimeSpan?> GetDurationDetails(string key, ContextSet? contexts = null, TimeSpan? defaultValue = null) =>
-        ApplyOnNoDefault(key, defaultValue, TypedDetailsRaw<TimeSpan?>(key, contexts, defaultValue, EvalValueType.Duration, CoerceDuration));
+        Resolved(key, defaultValue, TypedDetailsRaw<TimeSpan?>(key, contexts, defaultValue, EvalValueType.Duration, CoerceDuration, out var resolveError), resolveError);
 
     // ---------------- Internals ----------------
 
@@ -1433,8 +1438,21 @@ public sealed class Quonfig : IQuonfig
         ContextSet? contexts,
         T fallback,
         EvalValueType expected,
-        Func<object?, T> coerce)
+        Func<object?, T> coerce) =>
+        TypedDetailsRaw(key, contexts, fallback, expected, coerce, out _);
+
+    // resolveError: the QuonfigException (env var not set / not coercible, decryption failure)
+    // raised while resolving the matched value, so the public getters can apply the
+    // malformed-value contract (qfg-2agi.17). Null for every other outcome.
+    private EvaluationDetails<T> TypedDetailsRaw<T>(
+        string key,
+        ContextSet? contexts,
+        T fallback,
+        EvalValueType expected,
+        Func<object?, T> coerce,
+        out QuonfigException? resolveError)
     {
+        resolveError = null;
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(key);
 #else
@@ -1468,6 +1486,7 @@ public sealed class Quonfig : IQuonfig
         }
         catch (QuonfigException ex)
         {
+            resolveError = ex;
             return RowErrorDetails(cfg, fallback, ErrorCode.General, ex.Message);
         }
 #pragma warning disable CA1031 // crash containment at the eval boundary
@@ -1545,6 +1564,30 @@ public sealed class Quonfig : IQuonfig
             errorCode: null,
             errorMessage: null,
             metadata: MetadataFor(match, matchReason));
+    }
+
+    // Malformed-value contract (qfg-2agi.17): a value that cannot be resolved logs a warning once
+    // per key in every mode; with no defaultValue under OnNoDefault.Throw the specific
+    // QuonfigException subtype is raised; otherwise the default (or null) is returned with
+    // Reason=Error.
+    private EvaluationDetails<T> Resolved<T>(string key, T defaultValue, EvaluationDetails<T> details, QuonfigException? resolveError)
+    {
+        if (resolveError is not null)
+        {
+            if (_resolveErrorWarned.TryAdd(key, 0))
+            {
+                // A coercion message quotes the raw value, which may be sensitive; keep it out of logs.
+                var why = resolveError is QuonfigCoercionException
+                    ? "value cannot be converted to the config's declared type"
+                    : resolveError.Message;
+                _logger.LogWarning(
+                    "quonfig: config \"{Key}\" could not be resolved ({ErrorType}): {Reason}; returning default",
+                    key, resolveError.GetType().Name, why);
+            }
+            if (defaultValue is null && _opts.OnNoDefault == OnNoDefault.Throw) throw resolveError;
+            return details;
+        }
+        return ApplyOnNoDefault(key, defaultValue, details);
     }
 
     private EvaluationDetails<T> ApplyOnNoDefault<T>(string key, T defaultValue, EvaluationDetails<T> details)

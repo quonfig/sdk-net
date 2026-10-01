@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Changed: a value that cannot be resolved (`ENV_VAR` not set, `ENV_VAR` not convertible to the config's type, decryption failure) no longer returns null silently (qfg-2agi.17).** With the default `OnNoDefault.Throw` and no `defaultValue`, the typed getters and `Get*Details` now throw the specific exception: `QuonfigEnvVarNotSetException`, `QuonfigCoercionException` or `QuonfigDecryptionException` (before: `null`, no log). With a `defaultValue`, or under `OnNoDefault.Warn` / `Ignore`, the getter returns the default (or `null`) with `Reason.Error` as before. In every mode the client now logs one `Warning` per config key; the warning never contains the raw value. `IsFeatureEnabled` is unchanged.
+
 ## 1.4.0 - 2026-09-28
 
 - **Changed: a weighted rollout that hashes on a property missing from the context now hashes an empty value, so every such caller gets the same variant for that flag (qfg-9dxb.8).** In 1.3.0 such callers always got the first variant, even one with weight 0. A null value counts as missing. `EvaluationDetails.Metadata` reports `hashPropertyMissing: true` and the client logs one `Warning` per flag. New public members: `EvaluationMatch.MissingHashPropertyName`, an `EvaluationMatch.Matched` overload, and a `Resolver.Resolve` overload that report the missing property.
