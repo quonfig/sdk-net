@@ -76,36 +76,31 @@ public class GetTests
     [Fact(DisplayName = "duration 200 ms")]
     public void Duration200Ms()
     {
-        object? actual = TestSetup.ResolveCase("test.duration.PT0.2S", TestSetup.Map());
-        TestSetup.AssertDurationMillis(actual, 200L);
+        TestSetup.AssertPublicDurationMillis("test.duration.PT0.2S", TestSetup.Map(), 200L);
     }
 
     [Fact(DisplayName = "duration 90S")]
     public void Duration90s()
     {
-        object? actual = TestSetup.ResolveCase("test.duration.PT90S", TestSetup.Map());
-        TestSetup.AssertDurationMillis(actual, 90000L);
+        TestSetup.AssertPublicDurationMillis("test.duration.PT90S", TestSetup.Map(), 90000L);
     }
 
     [Fact(DisplayName = "duration 1.5M")]
     public void Duration15m()
     {
-        object? actual = TestSetup.ResolveCase("test.duration.PT1.5M", TestSetup.Map());
-        TestSetup.AssertDurationMillis(actual, 90000L);
+        TestSetup.AssertPublicDurationMillis("test.duration.PT1.5M", TestSetup.Map(), 90000L);
     }
 
     [Fact(DisplayName = "duration 0.5H")]
     public void Duration05h()
     {
-        object? actual = TestSetup.ResolveCase("test.duration.PT0.5H", TestSetup.Map());
-        TestSetup.AssertDurationMillis(actual, 1800000L);
+        TestSetup.AssertPublicDurationMillis("test.duration.PT0.5H", TestSetup.Map(), 1800000L);
     }
 
     [Fact(DisplayName = "duration test.duration.P1DT6H2M1.5S")]
     public void DurationTestDurationP1dt6h2m15s()
     {
-        object? actual = TestSetup.ResolveCase("test.duration.P1DT6H2M1.5S", TestSetup.Map());
-        TestSetup.AssertDurationMillis(actual, 108121500L);
+        TestSetup.AssertPublicDurationMillis("test.duration.P1DT6H2M1.5S", TestSetup.Map(), 108121500L);
     }
 
     [Fact(DisplayName = "json test")]

@@ -17,7 +17,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
-using System.Xml;
 using Quonfig.Sdk;
 using Quonfig.Sdk.Datadir;
 using Quonfig.Sdk.Eval;
@@ -239,36 +238,47 @@ internal static class TestSetup
         }
     }
 
-    /// <summary>Assert that <paramref name="actual"/> represents the given <paramref name="millis"/> (±1ms).</summary>
-    public static void AssertDurationMillis(object? actual, long millis)
+    /// <summary>
+    /// Shared PUBLIC <see cref="Quonfig"/> client over the integration datadir (Production env),
+    /// used by DURATION cases so they assert what a customer actually calls. Telemetry is off.
+    /// </summary>
+    private static readonly Lazy<Quonfig> PublicClientInstance = new(() => new Quonfig(new QuonfigOptions
     {
-        long got;
-        if (actual is TimeSpan ts) got = (long)ts.TotalMilliseconds;
-        else if (actual is string s) got = ParseFlexibleIsoDurationMillis(s);
-        else throw new Xunit.Sdk.XunitException($"expected TimeSpan or ISO-8601 string, got {actual ?? (object)"null"}");
-        if (Math.Abs(got - millis) > 1)
-        {
-            throw new Xunit.Sdk.XunitException($"expected {millis} ms (±1ms), got {got}");
-        }
-    }
+        Datadir = DATADIR,
+        Environment = ENV_ID,
+        EnvLookup = LookupEnv,
+        CollectEvaluationSummaries = false,
+        ContextUploadMode = ContextUploadMode.None,
+    }));
 
     /// <summary>
-    /// Parse an ISO-8601 duration that may include fractional hours / minutes (PT0.5H, PT1.5M).
-    /// .NET's <see cref="XmlConvert.ToTimeSpan"/> already handles these but legacy callers may pass
-    /// odd forms; fall back to it on anything we can't match ourselves.
+    /// Assert a DURATION case through the public typed getters
+    /// (<see cref="Quonfig.GetDuration"/> and <see cref="Quonfig.GetDurationDetails"/>) with
+    /// integer-exact millisecond comparison: no test-only parser, no tolerance (qfg-2agi.4).
     /// </summary>
-    public static long ParseFlexibleIsoDurationMillis(string s)
+    public static void AssertPublicDurationMillis(string key, Dictionary<string, object?> contextMap, long millis)
     {
-        var m = System.Text.RegularExpressions.Regex.Match(
-            s,
-            @"^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$");
-        if (!m.Success)
+        var client = PublicClientInstance.Value;
+        var ctx = ToContextSet(contextMap);
+        var expectedTicks = millis * TimeSpan.TicksPerMillisecond;
+
+        TimeSpan? value = client.GetDuration(key, ctx);
+        if (value is null || value.Value.Ticks != expectedTicks)
         {
-            return (long)XmlConvert.ToTimeSpan(s).TotalMilliseconds;
+            throw new Xunit.Sdk.XunitException(
+                $"GetDuration(\"{key}\") = {Describe(value)}, want exactly {millis} ms");
         }
-        double Parse(int g) => m.Groups[g].Success ? double.Parse(m.Groups[g].Value, System.Globalization.CultureInfo.InvariantCulture) : 0;
-        double total = Parse(1) * 86_400 + Parse(2) * 3_600 + Parse(3) * 60 + Parse(4);
-        return (long)Math.Round(total * 1000.0);
+
+        var details = client.GetDurationDetails(key, ctx);
+        if (details.Reason == Reason.Error || details.Value is null || details.Value.Value.Ticks != expectedTicks)
+        {
+            throw new Xunit.Sdk.XunitException(
+                $"GetDurationDetails(\"{key}\") = {Describe(details.Value)} (reason={details.Reason}, " +
+                $"error={details.ErrorCode}: {details.ErrorMessage}), want exactly {millis} ms");
+        }
+
+        static string Describe(TimeSpan? ts) =>
+            ts is null ? "null" : $"{ts.Value.Ticks / TimeSpan.TicksPerMillisecond} ms ({ts.Value.Ticks} ticks)";
     }
 
     // ---------------------------------------------------------------------------
@@ -1007,8 +1017,8 @@ internal static class TestSetup
 
     /// <summary>
     /// Unwraps a resolved <see cref="Value"/> to the CLR payload the generator's assertions
-    /// compare against. Duration values surface as TimeSpan (so AssertDurationMillis sees the
-    /// real ms count), JSON / string-lists stay as their dictionary / list payloads, etc.
+    /// compare against. Duration values surface as TimeSpan,
+    /// JSON / string-lists stay as their dictionary / list payloads, etc.
     /// </summary>
     private static object? UnwrapPayload(Value v)
     {
