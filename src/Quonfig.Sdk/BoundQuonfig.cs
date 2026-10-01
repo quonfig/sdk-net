@@ -5,8 +5,9 @@ namespace Quonfig.Sdk;
 
 /// <summary>
 /// Concrete <see cref="IBoundQuonfig"/>. Lightweight wrapper around a <see cref="Quonfig"/>
-/// instance + a fixed <see cref="ContextSet"/>; no data copy. Per-call contexts override the
-/// bound context key-by-key (same precedence as sdk-go / sdk-java).
+/// instance + a fixed <see cref="ContextSet"/>; no data copy. Contexts layered on top override the
+/// bound context per named context: a supplied named context replaces the whole same-named bound
+/// context, and named contexts it does not mention are kept (same precedence as sdk-go / sdk-java).
 /// </summary>
 public sealed class BoundQuonfig : IBoundQuonfig
 {

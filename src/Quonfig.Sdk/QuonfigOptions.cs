@@ -176,7 +176,8 @@ public sealed class QuonfigOptions
 
     /// <summary>
     /// Context merged into every evaluation as the lowest-precedence layer. Per-call contexts
-    /// and bound contexts override these values key-by-key.
+    /// and bound contexts override it per named context: a named context they supply replaces the
+    /// whole same-named context here, and named contexts they do not mention are kept.
     /// </summary>
     public ContextSet? GlobalContext { get; set; }
 
