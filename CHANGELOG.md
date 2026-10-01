@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Changed: a value that cannot be resolved (`ENV_VAR` not set, `ENV_VAR` not convertible to the config's type, decryption failure) no longer returns null silently (qfg-2agi.17).** With the default `OnNoDefault.Throw` and no `defaultValue`, the typed getters and `Get*Details` now throw the specific exception: `QuonfigEnvVarNotSetException`, `QuonfigCoercionException` or `QuonfigDecryptionException` (before: `null`, no log). With a `defaultValue`, or under `OnNoDefault.Warn` / `Ignore`, the getter returns the default (or `null`) with `Reason.Error` as before. In every mode the client now logs one `Warning` per config key; the warning never contains the raw value. `IsFeatureEnabled` is unchanged.
+- **Tests: a client-level test now proves a confidential value evaluated through the public client reaches the evaluation-summary telemetry only in its redacted `*****<md5>` form (qfg-2agi.16).** No behavior change.
 
 ## 1.4.0 - 2026-09-28
 
