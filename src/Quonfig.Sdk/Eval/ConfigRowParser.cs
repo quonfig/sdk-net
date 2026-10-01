@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
-using System.Xml;
 
 namespace Quonfig.Sdk.Eval;
 
@@ -180,12 +179,12 @@ public static class ConfigRowParser
                 return new Value(ValueType.LogLevel, valueEl.GetString() ?? "", confidential, decryptWith);
             case "duration":
                 {
-                    var s = valueEl.GetString();
-                    if (string.IsNullOrEmpty(s))
-                    {
-                        return new Value(ValueType.Duration, TimeSpan.Zero, confidential, decryptWith);
-                    }
-                    return new Value(ValueType.Duration, ParseFlexibleIsoDuration(s!), confidential, decryptWith);
+                    // A valid value is parsed once here. A malformed one (qfg-2agi.12) keeps its raw
+                    // string so loading never fails and the typed getter applies the malformed-value
+                    // contract (default + warn once; Throw mode raises) when it is read.
+                    var s = valueEl.ValueKind == JsonValueKind.String ? valueEl.GetString() ?? "" : valueEl.GetRawText();
+                    object payload = IsoDuration.TryParse(s, out var ts) ? ts : s;
+                    return new Value(ValueType.Duration, payload, confidential, decryptWith);
                 }
             case "json":
                 return new Value(ValueType.Json, ConvertJson(valueEl), confidential, decryptWith);
@@ -272,28 +271,6 @@ public static class ConfigRowParser
         "provided" => ValueType.Provided,
         _ => ValueType.String,
     };
-
-    // Cross-SDK ISO-8601 duration parser that accepts fractional days/hours/minutes (PT0.5H,
-    // PT1.5M, P1DT6H2M1.5S). .NET's XmlConvert.ToTimeSpan only allows fractional seconds, so
-    // the shared YAML corpus tripped over those forms; this matches python's isodate behavior.
-    internal static TimeSpan ParseFlexibleIsoDuration(string s)
-    {
-        var m = System.Text.RegularExpressions.Regex.Match(
-            s,
-            @"^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$");
-        if (!m.Success)
-        {
-            // Fall back to .NET's strict parser; on failure return Zero so the call site stays
-            // total (matches the legacy try/catch the old code did).
-            try { return XmlConvert.ToTimeSpan(s); }
-            catch (FormatException) { return TimeSpan.Zero; }
-        }
-        double Parse(int g) => m.Groups[g].Success
-            ? double.Parse(m.Groups[g].Value, NumberStyles.Float, CultureInfo.InvariantCulture)
-            : 0;
-        double seconds = Parse(1) * 86_400 + Parse(2) * 3_600 + Parse(3) * 60 + Parse(4);
-        return TimeSpan.FromMilliseconds(Math.Round(seconds * 1000.0));
-    }
 
     private static string? TryGetString(JsonElement el, string name)
     {

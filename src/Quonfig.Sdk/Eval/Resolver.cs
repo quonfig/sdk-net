@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
-using System.Xml;
 using Quonfig.Sdk.Crypto;
 using Quonfig.Sdk.Exceptions;
 
@@ -353,7 +352,7 @@ public sealed class Resolver
                 ValueType.Double => double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture),
                 ValueType.StringList => SplitStringList(raw),
                 ValueType.Json => ParseJson(raw) ?? new Dictionary<string, object?>(StringComparer.Ordinal),
-                ValueType.Duration => XmlConvert.ToTimeSpan(raw),
+                ValueType.Duration => IsoDuration.Parse(raw),
                 ValueType.String => raw,
                 ValueType.LogLevel => raw,
                 _ => raw,

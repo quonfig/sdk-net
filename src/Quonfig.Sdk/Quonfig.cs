@@ -1529,6 +1529,12 @@ public sealed class Quonfig : IQuonfig
         }
         catch (Exception ex) when (ex is InvalidCastException || ex is FormatException || ex is OverflowException)
         {
+            // A stored value that cannot be read as the requested type follows the same
+            // malformed-value contract as an ENV_VAR one (qfg-2agi.12): Resolved() logs a warning
+            // once per key and raises under OnNoDefault.Throw when no defaultValue is supplied.
+            // The message names the key only; the raw value may be sensitive.
+            resolveError = new QuonfigCoercionException(
+                FormattableString.Invariant($"config \"{key}\" cannot be read as {expected}: {ex.Message}"), ex);
             return RowErrorDetails(
                 cfg, fallback, ErrorCode.TypeMismatch,
                 FormattableString.Invariant($"cannot return \"{key}\" as {expected}: {ex.Message}"));
@@ -1827,7 +1833,7 @@ public sealed class Quonfig : IQuonfig
     {
         null => null,
         TimeSpan t => t,
-        string s => System.Xml.XmlConvert.ToTimeSpan(s),
+        string s => IsoDuration.Parse(s),
         _ => throw new InvalidCastException("payload is not a duration"),
     };
 
