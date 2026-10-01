@@ -41,6 +41,19 @@ public sealed class Value : IEquatable<Value>
         DecryptWith = decryptWith;
     }
 
+    /// <summary>
+    /// The telemetry marker computed from the value as stored, before resolution. Set only on a
+    /// decrypted value: the cross-SDK contract hashes the stored ciphertext, never the plaintext.
+    /// Not part of equality.
+    /// </summary>
+    internal string? StoredReportableValue { get; private set; }
+
+    internal static Value Decrypted(string plaintext, Value stored) =>
+        new(ValueType.String, plaintext, true, null)
+        {
+            StoredReportableValue = Resolver.ReportableValueFor(stored),
+        };
+
     /// <inheritdoc/>
     public bool Equals(Value? other) =>
         other is not null

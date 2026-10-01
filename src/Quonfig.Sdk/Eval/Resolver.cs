@@ -48,7 +48,7 @@ public sealed class Resolver
     /// <summary>
     /// Returns the redacted telemetry marker for a resolved <see cref="Value"/> that must NOT have its
     /// plaintext reported — a confidential value or one that was AES-GCM decrypted. The marker is
-    /// <c>*****</c> followed by the first five lowercase hex chars of the MD5 of the plaintext (10
+    /// <c>*****</c> followed by the first five lowercase hex chars of the MD5 of the value as stored (the ciphertext for a decrypted value; 10
     /// chars total), matching the cross-SDK contract (sdk-java <c>reportableValueFor</c>, sdk-node
     /// <c>makeConfidential</c>, sdk-ruby <c>reportable_wrapped_value</c>). Returns <c>null</c> for a
     /// plain value, so telemetry reports the real value; the MD5 here is a non-cryptographic
@@ -62,6 +62,10 @@ public sealed class Resolver
         if (val is null)
         {
             return null;
+        }
+        if (val.StoredReportableValue is not null)
+        {
+            return val.StoredReportableValue;
         }
         if (!val.Confidential && string.IsNullOrEmpty(val.DecryptWith))
         {
@@ -326,8 +330,9 @@ public sealed class Resolver
         }
 
         // Plaintext remains confidential (for telemetry redaction); decryptWith is cleared since
-        // the value is no longer ciphertext.
-        return new Value(ValueType.String, plaintext, true, null);
+        // the value is no longer ciphertext. The telemetry marker is built from the stored
+        // ciphertext, not the plaintext (cross-SDK contract, telemetry.yaml).
+        return Value.Decrypted(plaintext, candidate);
     }
 
     private static string[] Append(string[]? path, string key)

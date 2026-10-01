@@ -86,8 +86,11 @@ public sealed class MalformedValueContractTests : IDisposable
         return client;
     }
 
+    // CA2249: Contains(string, StringComparison) is not available on net48.
+#pragma warning disable CA2249
     private static List<string> Warnings(RecordingLogger logger, string key) =>
-        logger.Messages(MelLogLevel.Warning).Where(m => m.Contains("\"" + key + "\"", StringComparison.Ordinal)).ToList();
+        logger.Messages(MelLogLevel.Warning).Where(m => m.IndexOf("\"" + key + "\"", StringComparison.Ordinal) >= 0).ToList();
+#pragma warning restore CA2249
 
     // ----- OnNoDefault.Throw, no defaultValue: raise the specific subtype -----
 
