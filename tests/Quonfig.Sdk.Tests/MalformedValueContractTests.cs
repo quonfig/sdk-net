@@ -125,11 +125,14 @@ public sealed class MalformedValueContractTests : IDisposable
     }
 
     [Fact]
-    public async Task Throw_DetailsGetter_AlsoRaises()
+    public async Task Throw_DetailsGetter_NeverRaises_ReportsError()
     {
+        // Get*Details never throw (qfg-2agi.12 release decision); see DetailsNeverThrowTests.
         await using var client = await NewClientAsync(OnNoDefault.Throw);
-        var act = () => client.GetIntDetails(BadIntEnvKey);
-        act.Should().Throw<QuonfigCoercionException>();
+        var d = client.GetIntDetails(BadIntEnvKey);
+        d.Value.Should().BeNull();
+        d.Reason.Should().Be(Reason.Error);
+        d.ErrorCode.Should().Be(ErrorCode.General);
     }
 
     [Fact]

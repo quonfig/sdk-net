@@ -94,6 +94,9 @@ public interface IQuonfig : IAsyncDisposable
     LogLevel? GetLogLevel(string loggerPath, ContextSet? contexts = null);
 
     // ---- detail variants (OpenFeature-ready) ----
+    // The Get*Details getters never throw, whatever OnNoDefault is set to: a missing key or a
+    // value that cannot be resolved returns details with Reason.Error, an ErrorCode and the
+    // default (or null).
 
     /// <summary>Full <see cref="EvaluationDetails{T}"/> for <see cref="GetString"/>.</summary>
     EvaluationDetails<string?> GetStringDetails(string key, ContextSet? contexts = null, string? defaultValue = null);

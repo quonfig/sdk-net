@@ -10,6 +10,8 @@ public enum OnNoDefault
     /// Throw <see cref="Exceptions.QuonfigKeyNotFoundException"/> (default — fail loud). A value that
     /// exists but cannot be resolved throws <see cref="Exceptions.QuonfigEnvVarNotSetException"/>,
     /// <see cref="Exceptions.QuonfigCoercionException"/> or <see cref="Exceptions.QuonfigDecryptionException"/>.
+    /// Applies to the plain typed getters only; the <c>Get*Details</c> getters never throw and
+    /// report <see cref="Reason.Error"/> instead.
     /// </summary>
     Throw,
 
