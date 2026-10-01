@@ -485,6 +485,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("test.duration.malformed.30s", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("test.duration.malformed.30s", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "stored malformed duration 30s with no default returns nil")]
@@ -511,6 +512,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("test.duration.malformed.PT0.5H", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("test.duration.malformed.PT0.5H", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "stored malformed duration PT0.5H with no default returns nil")]
@@ -537,6 +539,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("test.duration.malformed.P1DT", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("test.duration.malformed.P1DT", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "stored malformed duration P1DT with no default returns nil")]
@@ -563,6 +566,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("test.duration.malformed.garbage", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("test.duration.malformed.garbage", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "stored malformed duration garbage with no default returns nil")]
@@ -589,6 +593,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("test.duration.malformed.empty", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("test.duration.malformed.empty", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "stored malformed duration empty with no default returns nil")]
@@ -616,6 +621,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("provided.duration.malformed.30s", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("provided.duration.malformed.30s", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "env-var-provided malformed duration 30s with no default returns nil")]
@@ -644,6 +650,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("provided.duration.malformed.PT0.5H", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("provided.duration.malformed.PT0.5H", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "env-var-provided malformed duration PT0.5H with no default returns nil")]
@@ -672,6 +679,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("provided.duration.malformed.P1DT", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("provided.duration.malformed.P1DT", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "env-var-provided malformed duration P1DT with no default returns nil")]
@@ -700,6 +708,7 @@ public sealed class GetTests
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), client.GetDuration("provided.duration.malformed.garbage", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond)));
         var details = client.GetDurationDetails("provided.duration.malformed.garbage", defaultValue: TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond));
         Assert.Equal(TimeSpan.FromTicks(7000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.Equal(Reason.Error, details.Reason);
     }
 
     [Fact(DisplayName = "env-var-provided malformed duration garbage with no default returns nil")]
