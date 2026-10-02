@@ -246,11 +246,8 @@ public sealed class Evaluator
         return next;
     }
 
-    private ConfigRow GetOrParse(ConfigResponse response)
-    {
-        if (_parsed.TryGetValue(response, out var existing)) return existing;
-        var parsed = ConfigRowParser.Parse(response);
-        _parsed.Add(response, parsed);
-        return parsed;
-    }
+    // GetValue is atomic: concurrent first evaluations may each parse, but all get the one row
+    // that was stored. TryGetValue + Add threw on the losing threads (qfg-xmuj).
+    private ConfigRow GetOrParse(ConfigResponse response) =>
+        _parsed.GetValue(response, ConfigRowParser.Parse);
 }

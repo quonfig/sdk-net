@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed: when several threads evaluated a config for the first time at once, some of those evaluations failed and returned the fallback with `Reason.Error` / `ErrorCode.General` ("An item with the same key has already been added") (qfg-xmuj).** The evaluator's per-config parse cache now inserts atomically. Present since at least 1.3.0.
+
 ## 1.5.0 - 2026-10-02
 
 - **Fixed: the evaluation-summary telemetry marker of an encrypted (`decryptWith`) value is now hashed from the stored ciphertext, not the decrypted plaintext (qfg-2agi.34).** This matches the cross-SDK contract and the integration-test-data case `confidential encrypted string is redacted using ciphertext hash` (`*****936c9`, before: `*****18aa7`). The plaintext was never sent; only the 5-character hash prefix changes.
