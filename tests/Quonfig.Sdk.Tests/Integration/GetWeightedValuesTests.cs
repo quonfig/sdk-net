@@ -97,6 +97,42 @@ public sealed class GetWeightedValuesTests
         Assert.Equal("b", actual);
     }
 
+    [Fact(DisplayName = "non-ascii tracking_id emoji hashes utf-8 bytes")]
+    public async Task NonAsciiTrackingIdEmojiHashesUtf8Bytes()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("feature-flag.weighted.even-split-ones", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "\ud83d\ude80-rocket" } });
+        Assert.Equal("a", actual);
+    }
+
+    [Fact(DisplayName = "non-ascii tracking_id latin hashes utf-8 bytes")]
+    public async Task NonAsciiTrackingIdLatinHashesUtf8Bytes()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("feature-flag.weighted.even-split-ones", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "münchen-7" } });
+        Assert.Equal("a", actual);
+    }
+
+    [Fact(DisplayName = "non-ascii tracking_id cjk hashes utf-8 bytes")]
+    public async Task NonAsciiTrackingIdCjkHashesUtf8Bytes()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("feature-flag.weighted.even-split-ones", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "ユーザー1" } });
+        Assert.Equal("b", actual);
+    }
+
     [Fact(DisplayName = "non-standard sum still serves normalized true bucket")]
     public async Task NonStandardSumStillServesNormalizedTrueBucket()
     {
