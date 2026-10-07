@@ -219,7 +219,7 @@ public sealed class SseClient : IDisposable
             }
 
             // Jittered sleep then exponential backoff if the connect produced nothing.
-            var sleep = consumed ? _initialBackoff : delay;
+            var sleep = ReconnectSleep(consumed, delay, _initialBackoff, _rng);
             try
             {
                 await Task.Delay(sleep, cancellationToken).ConfigureAwait(false);
@@ -492,6 +492,19 @@ public sealed class SseClient : IDisposable
     }
 
     /// <summary>
+    /// The sleep before the next reconnect: after a stream that delivered data, the initial
+    /// backoff with +/-20% jitter (qfg-goi1.2.15, sdk-go jitters every reconnect, so a fleet
+    /// recycled by an api-delivery deploy does not reconnect in lockstep); after a failed connect,
+    /// the current (already jittered) backoff.
+    /// </summary>
+    internal static TimeSpan ReconnectSleep(bool consumed, TimeSpan delay, TimeSpan initialBackoff, Random rng) =>
+        consumed ? Jitter(initialBackoff, rng) : delay;
+
+    // +/-20%, uniform over [0.8x, 1.2x).
+    private static TimeSpan Jitter(TimeSpan d, Random rng) =>
+        TimeSpan.FromMilliseconds(d.TotalMilliseconds * (0.8 + (rng.NextDouble() * 0.4)));
+
+    /// <summary>
     /// Computes the next reconnect delay: doubles <paramref name="current"/>, caps at
     /// <paramref name="max"/>, then applies ±20% jitter. Public so tests can pin the math.
     /// </summary>
@@ -504,9 +517,7 @@ public sealed class SseClient : IDisposable
 #endif
         double doubled = current.TotalMilliseconds * 2.0;
         double capped = Math.Min(doubled, max.TotalMilliseconds);
-        // Jitter ±20% — uniform over [0.8x, 1.2x).
-        double jitter = 0.8 + (rng.NextDouble() * 0.4);
-        return TimeSpan.FromMilliseconds(capped * jitter);
+        return Jitter(TimeSpan.FromMilliseconds(capped), rng);
     }
 
     private static void Flush(StringBuilder dataBuf, Action<ConfigEnvelope> onEnvelope, ILogger logger)

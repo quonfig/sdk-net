@@ -186,6 +186,30 @@ public sealed class SseClientTests
         trickler.Disposed.Should().BeFalse("healthy stream must not trip the watchdog");
     }
 
+    // qfg-goi1.2.15 item 6: the reconnect after a stream that delivered data (the normal case after
+    // an api-delivery deploy recycles every connection) is jittered +/-20%, like the failure path
+    // and like sdk-go, so a fleet does not reconnect in lockstep.
+    [Fact]
+    public void ReconnectSleep_AfterConsumedStream_IsJittered()
+    {
+        var rng = new Random(42);
+        var initial = TimeSpan.FromSeconds(1);
+        var sleeps = Enumerable.Range(0, 50)
+            .Select(_ => SseClient.ReconnectSleep(consumed: true, delay: initial, initialBackoff: initial, rng))
+            .ToList();
+
+        sleeps.Should().OnlyContain(s => s >= TimeSpan.FromMilliseconds(800) && s < TimeSpan.FromMilliseconds(1200));
+        sleeps.Distinct().Count().Should().BeGreaterThan(1, "consumed-stream reconnects must not all sleep exactly the initial backoff");
+    }
+
+    [Fact]
+    public void ReconnectSleep_AfterFailedConnect_UsesTheCurrentBackoff()
+    {
+        var delay = TimeSpan.FromMilliseconds(3456);
+        SseClient.ReconnectSleep(consumed: false, delay: delay, initialBackoff: TimeSpan.FromSeconds(1), new Random(1))
+            .Should().Be(delay);
+    }
+
     [Fact]
     public void NextBackoff_GrowsExponentiallyAndCapsAtMax()
     {
