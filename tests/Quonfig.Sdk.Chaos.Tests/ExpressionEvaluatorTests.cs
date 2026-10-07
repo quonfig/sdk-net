@@ -58,6 +58,26 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
+    public void SdkMetricSseConnectAttempts_CountsEveryTransitionIntoConnected()
+    {
+        // Scenario 09 (flapping) asserts quonfig_sse_connect_attempts_total < 100. Like sdk-go's
+        // probe (onSSEState: connAttempts++), every transition into connected is one attempt
+        // (qfg-goi1.2.43).
+        var probe = new ChaosProbe();
+        var ev = new ExpressionEvaluator(probe);
+        var before = ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') == 0");
+        Assert.True(before.Passed, before.Reason);
+        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        probe.OnConnectionState(Sdk.ConnectionState.Disconnected);
+        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        probe.OnConnectionState(Sdk.ConnectionState.FallingBack);
+        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var r = ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') == 3");
+        Assert.True(r.Passed, r.Reason);
+        Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') < 100").Passed);
+    }
+
+    [Fact]
     public void SdkMetricUnknownName_FailsLoudlyInsteadOfComparingAgainstZero()
     {
         // A metric the probe does not implement used to read as 0, so "== 0" (or "< 100")

@@ -46,6 +46,7 @@ internal sealed class ChaosProbe
     private DateTime? _lastRefreshUtc;
     private long _restartLayer1;
     private long _restartLayer2;
+    private long _connAttempts; // count of (any) transition into connected, as sdk-go's probe
     private bool _fallbackActive;
     private int _processCrashed; // 0 == still alive
     private readonly List<LogLine> _logs = new();
@@ -115,8 +116,10 @@ internal sealed class ChaosProbe
     public void MarkProcessCrashed() => Volatile.Write(ref _processCrashed, 1);
 
     /// <summary>
-    /// Returns the probe's count of the named SDK metric. Layer "1" tracks SSE worker restarts;
-    /// layer "2" tracks Layer 2 fallback poller restarts. <c>Known</c> is false for a metric name
+    /// Returns the probe's count of the named SDK metric. For
+    /// <c>quonfig_sdk_worker_restart_total</c>, layer "1" tracks SSE worker restarts and layer "2"
+    /// tracks Layer 2 fallback poller restarts. <c>quonfig_sse_connect_attempts_total</c> counts
+    /// every transition into connected, as sdk-go's probe does. <c>Known</c> is false for a metric name
     /// the probe does not implement, so the evaluator fails the expectation loudly instead of
     /// comparing against a silent 0.
     /// </summary>
@@ -132,6 +135,7 @@ internal sealed class ChaosProbe
                     "2" => _restartLayer2,
                     _ => _restartLayer1 + _restartLayer2,
                 }, true),
+                "quonfig_sse_connect_attempts_total" => (_connAttempts, true),
                 _ => (0, false),
             };
         }
@@ -154,6 +158,7 @@ internal sealed class ChaosProbe
                 case Sdk.ConnectionState.Connected:
                     _state = State.Connected;
                     _fallbackActive = false;
+                    _connAttempts++;
                     break;
                 case Sdk.ConnectionState.FallingBack:
                     _state = State.FallingBack;
