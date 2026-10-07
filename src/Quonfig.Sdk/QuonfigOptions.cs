@@ -265,8 +265,9 @@ public sealed class QuonfigOptions
     public TimeSpan TelemetryMaxRetainedAge { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Maximum distinct evaluation-summary keys (config key and type) per telemetry window. Defaults
-    /// to 10,000. New keys beyond it are not recorded; keys already recorded keep counting.
+    /// Maximum distinct evaluation-summary counters (config, rule, weighted index and selected value)
+    /// per telemetry window. Defaults to 10,000. New counters beyond it are not recorded; counters
+    /// already recorded keep counting.
     /// </summary>
     public int TelemetryMaxEvaluationSummaries { get; set; } = 10_000;
 

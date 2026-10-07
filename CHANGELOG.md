@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+<!-- Recommended semver: patch (bug fix, no public API change; wire payload shape unchanged). -->
+
+- **Fixed: evaluation-summary telemetry grew one counter per evaluation for a `json` config whose value comes from an `ENV_VAR` (qfg-goi1.2.2).** The SDK re-parses that value into a new dictionary on every evaluation, and counters were grouped by object reference, so a window of 200k `GetJson` calls kept about 135 MB and sent a 26 MB telemetry POST. Counters now group JSON objects, arrays and string lists by their canonical JSON text (object keys sorted), so equal values share one counter. `TelemetryMaxEvaluationSummaries` (10,000) now caps the distinct counters per window, as in sdk-go, instead of only the distinct config keys; a new counter past the cap is not recorded, and counters already recorded keep counting.
+
 ## 1.5.1 - 2026-10-03
 
 - **Fixed: when several threads evaluated a config for the first time at once, some of those evaluations failed and returned the fallback with `Reason.Error` / `ErrorCode.General` ("An item with the same key has already been added") (qfg-xmuj).** The evaluator's per-config parse cache now inserts atomically. Present since at least 1.3.0.

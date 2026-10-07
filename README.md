@@ -116,9 +116,9 @@ first success after failures logs one `Information` line.
 does not resend kept batches, and never blocks shutdown on a slow telemetry endpoint.
 
 **Memory.** Everything is bounded: at most `TelemetryMaxEvaluationSummaries` (10,000)
-evaluation-summary keys, `TelemetryMaxContextShapeFields` (10,000) context-shape fields and
-`TelemetryMaxExampleContexts` (10,000) example contexts per window (keys already seen keep counting
-at the cap), a 100,000-entry example-context rate-limit map, and the 2MB retained queue.
+evaluation-summary counters, `TelemetryMaxContextShapeFields` (10,000) context-shape fields and
+`TelemetryMaxExampleContexts` (10,000) example contexts per window (counters already seen keep
+counting at the cap), a 100,000-entry example-context rate-limit map, and the 2MB retained queue.
 
 ## Target frameworks
 

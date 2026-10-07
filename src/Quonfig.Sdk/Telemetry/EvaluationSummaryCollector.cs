@@ -1,6 +1,11 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
 
 namespace Quonfig.Sdk.Telemetry;
 
@@ -11,6 +16,12 @@ namespace Quonfig.Sdk.Telemetry;
 /// <c>count=1000</c>. Distinct <c>(configId, ruleIndex, weightedValueIndex, selectedValue)</c>
 /// tuples produce distinct counters; counters are then grouped by <c>(configKey, configType)</c>
 /// into summary rows. Mirrors sdk-java's <c>EvaluationSummaryCollector</c>.</para>
+///
+/// <para>Non-scalar selected values (JSON objects/arrays, string lists) are grouped by their
+/// canonical JSON text, not by reference, so equal values parsed fresh on every evaluation (an
+/// ENV_VAR-provided json config) share one counter. The number of distinct counters per window is
+/// capped (P6, as sdk-go's <c>maxKeys</c>): a new counter past the cap is dropped, existing
+/// counters keep incrementing.</para>
 /// </summary>
 public sealed class EvaluationSummaryCollector
 {
@@ -18,12 +29,13 @@ public sealed class EvaluationSummaryCollector
     private volatile bool _enabled;
     private readonly object _gate = new();
     private readonly Dictionary<SummaryKey, Dictionary<CounterKey, CounterCell>> _data = new();
+    private int _counterCount;
     private long? _startAtMs;
 
     /// <summary>Initializes a new collector with a default 10,000-row cap.</summary>
     public EvaluationSummaryCollector(bool enabled) : this(enabled, 10_000) { }
 
-    /// <summary>Initializes a new collector with the supplied cap on distinct <c>(key,type)</c> rows.</summary>
+    /// <summary>Initializes a new collector with the supplied cap on distinct counters per window.</summary>
     public EvaluationSummaryCollector(bool enabled, int maxDataSize)
     {
         _enabled = enabled;
@@ -33,7 +45,7 @@ public sealed class EvaluationSummaryCollector
     /// <summary>True when this collector accepts pushes; false when constructed with <c>enabled=false</c>.</summary>
     public bool IsEnabled => _enabled;
 
-    /// <summary>Cap on distinct <c>(key,type)</c> rows per window; existing rows keep counting at the cap.</summary>
+    /// <summary>Cap on distinct counters per window; existing counters keep counting at the cap.</summary>
     internal int MaxDataSize => _maxDataSize;
 
     /// <summary>Stops collecting and clears pending data (telemetry disabled for the process, P3).</summary>
@@ -43,6 +55,7 @@ public sealed class EvaluationSummaryCollector
         lock (_gate)
         {
             _data.Clear();
+            _counterCount = 0;
             _startAtMs = null;
         }
     }
@@ -55,32 +68,36 @@ public sealed class EvaluationSummaryCollector
         if (string.Equals(stat.ConfigType, "LOG_LEVEL", StringComparison.OrdinalIgnoreCase)) return;
 
         var sk = new SummaryKey(stat.ConfigKey, stat.ConfigType);
+
+        bool redacted = stat.ReportableValue is not null;
+        string wrapper = redacted ? "string" : WrapperKeyForValue(stat.SelectedValue);
+        object payload = redacted ? stat.ReportableValue! : stat.SelectedValue!;
+        // Canonical text is computed outside the lock: it is per-evaluation work for JSON values.
+        string? canonical = IsScalar(payload) ? null : CanonicalJson(payload);
+
+        var ck = new CounterKey(stat.ConfigId, stat.RuleIndex, wrapper, canonical ?? payload, canonical is not null, stat.WeightedValueIndex);
+
         lock (_gate)
         {
-            if (_data.Count >= _maxDataSize && !_data.ContainsKey(sk)) return;
+            if (_data.TryGetValue(sk, out var bucket) && bucket.TryGetValue(ck, out var cell))
+            {
+                cell.Count++;
+                return;
+            }
+
+            // Cap on distinct counters (P6): drop a NEW counter at the cap; existing ones keep counting.
+            if (_counterCount >= _maxDataSize) return;
 
             _startAtMs ??= NowMs();
 
-            bool redacted = stat.ReportableValue is not null;
-            string wrapper = redacted ? "string" : WrapperKeyForValue(stat.SelectedValue);
-            object payload = redacted ? stat.ReportableValue! : stat.SelectedValue!;
-
-            var ck = new CounterKey(stat.ConfigId, stat.RuleIndex, wrapper, payload, stat.WeightedValueIndex);
-
-            if (!_data.TryGetValue(sk, out var bucket))
+            if (bucket is null)
             {
                 bucket = new Dictionary<CounterKey, CounterCell>();
                 _data[sk] = bucket;
             }
 
-            if (bucket.TryGetValue(ck, out var cell))
-            {
-                cell.Count++;
-            }
-            else
-            {
-                bucket[ck] = new CounterCell { Count = 1, Reason = stat.Reason };
-            }
+            bucket[ck] = new CounterCell { Count = 1, Reason = stat.Reason, Payload = payload };
+            _counterCount++;
         }
     }
 
@@ -108,7 +125,7 @@ public sealed class EvaluationSummaryCollector
                         ["configId"] = ce.Key.ConfigId,
                         ["conditionalValueIndex"] = ce.Key.RuleIndex,
                         ["configRowIndex"] = 0,
-                        ["selectedValue"] = new Dictionary<string, object?> { [ce.Key.Wrapper] = ce.Key.SelectedValue },
+                        ["selectedValue"] = new Dictionary<string, object?> { [ce.Key.Wrapper] = ce.Value.Payload },
                         ["count"] = ce.Value.Count,
                         ["reason"] = ce.Value.Reason,
                     };
@@ -136,6 +153,7 @@ public sealed class EvaluationSummaryCollector
             var ev = new Dictionary<string, object?> { ["summaries"] = envelope };
 
             _data.Clear();
+            _counterCount = 0;
             _startAtMs = null;
             return ev;
         }
@@ -163,6 +181,84 @@ public sealed class EvaluationSummaryCollector
         }
         if (value is IEnumerable enumerable && value is not string) return "stringList";
         return "string";
+    }
+
+    private static bool IsScalar(object value) => value is string || value is not IEnumerable;
+
+    // Canonical JSON text for a non-scalar value: object keys sorted ordinally, so equal values
+    // built as fresh objects (or with a different key order) produce the same text.
+    internal static string CanonicalJson(object value)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            WriteCanonical(writer, value, depth: 0);
+        }
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    // Depth guard: a self-referencing collection must not overflow the stack.
+    private const int MaxCanonicalDepth = 64;
+
+    private static void WriteCanonical(Utf8JsonWriter writer, object? value, int depth)
+    {
+        if (depth > MaxCanonicalDepth)
+        {
+            writer.WriteStringValue("...");
+            return;
+        }
+        switch (value)
+        {
+            case null:
+                writer.WriteNullValue();
+                return;
+            case string s:
+                writer.WriteStringValue(s);
+                return;
+            case bool b:
+                writer.WriteBooleanValue(b);
+                return;
+            case long l:
+                writer.WriteNumberValue(l);
+                return;
+            case int i:
+                writer.WriteNumberValue(i);
+                return;
+            case double d when !double.IsNaN(d) && !double.IsInfinity(d):
+                writer.WriteNumberValue(d);
+                return;
+            case decimal m:
+                writer.WriteNumberValue(m);
+                return;
+            case JsonElement el:
+                el.WriteTo(writer);
+                return;
+            case IDictionary dict:
+                var entries = new List<KeyValuePair<string, object?>>(dict.Count);
+                foreach (DictionaryEntry e in dict)
+                {
+                    entries.Add(new KeyValuePair<string, object?>(
+                        Convert.ToString(e.Key, CultureInfo.InvariantCulture) ?? string.Empty, e.Value));
+                }
+                writer.WriteStartObject();
+                foreach (var e in entries.OrderBy(e => e.Key, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(e.Key);
+                    WriteCanonical(writer, e.Value, depth + 1);
+                }
+                writer.WriteEndObject();
+                return;
+            case IEnumerable seq:
+                writer.WriteStartArray();
+                foreach (var item in seq) WriteCanonical(writer, item, depth + 1);
+                writer.WriteEndArray();
+                return;
+            default:
+                // Other scalars (float, other integer widths, NaN/Infinity, unknown types): their
+                // invariant text is stable across evaluations, which is all grouping needs.
+                writer.WriteStringValue(value.GetType().Name + ":" + Convert.ToString(value, CultureInfo.InvariantCulture));
+                return;
+        }
     }
 
     private static long NowMs() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -203,27 +299,32 @@ public sealed class EvaluationSummaryCollector
 
     private readonly struct CounterKey : IEquatable<CounterKey>
     {
-        public CounterKey(string configId, int ruleIndex, string wrapper, object selectedValue, int weightedValueIndex)
+        // GroupValue is the selected value itself for scalars, or its canonical JSON text for
+        // non-scalars (IsCanonical = true), so equality is by value, never by reference.
+        public CounterKey(string configId, int ruleIndex, string wrapper, object groupValue, bool isCanonical, int weightedValueIndex)
         {
             ConfigId = configId;
             RuleIndex = ruleIndex;
             Wrapper = wrapper;
-            SelectedValue = selectedValue;
+            GroupValue = groupValue;
+            IsCanonical = isCanonical;
             WeightedValueIndex = weightedValueIndex;
         }
 
         public string ConfigId { get; }
         public int RuleIndex { get; }
         public string Wrapper { get; }
-        public object SelectedValue { get; }
+        public object GroupValue { get; }
+        public bool IsCanonical { get; }
         public int WeightedValueIndex { get; }
 
         public bool Equals(CounterKey other) =>
             RuleIndex == other.RuleIndex
             && WeightedValueIndex == other.WeightedValueIndex
+            && IsCanonical == other.IsCanonical
             && string.Equals(ConfigId, other.ConfigId, StringComparison.Ordinal)
             && string.Equals(Wrapper, other.Wrapper, StringComparison.Ordinal)
-            && SelectedValueEquals(SelectedValue, other.SelectedValue);
+            && GroupValueEquals(GroupValue, other.GroupValue);
 
         public override bool Equals(object? obj) => obj is CounterKey k && Equals(k);
 
@@ -241,47 +342,24 @@ public sealed class EvaluationSummaryCollector
                 h = (h * 31) + RuleIndex;
                 h = (h * 31) + (Wrapper?.GetHashCode(StringComparison.Ordinal) ?? 0);
 #endif
-                h = (h * 31) + SelectedValueHash(SelectedValue);
+                h = (h * 31) + GroupValueHash(GroupValue);
+                h = (h * 31) + (IsCanonical ? 1 : 0);
                 h = (h * 31) + WeightedValueIndex;
                 return h;
             }
         }
 
-        private static bool SelectedValueEquals(object a, object b)
+        private static bool GroupValueEquals(object a, object b)
         {
             if (ReferenceEquals(a, b)) return true;
             if (a is null || b is null) return false;
-            if (a is IList<string> la && b is IList<string> lb)
-            {
-                if (la.Count != lb.Count) return false;
-                for (int i = 0; i < la.Count; i++)
-                {
-                    if (!string.Equals(la[i], lb[i], StringComparison.Ordinal)) return false;
-                }
-                return true;
-            }
+            if (a is string sa && b is string sb) return string.Equals(sa, sb, StringComparison.Ordinal);
             return a.Equals(b);
         }
 
-        private static int SelectedValueHash(object v)
+        private static int GroupValueHash(object v)
         {
             if (v is null) return 0;
-            if (v is IList<string> list)
-            {
-                unchecked
-                {
-                    int h = 17;
-                    foreach (var s in list)
-                    {
-#if NETSTANDARD2_0
-                        h = (h * 31) + (s?.GetHashCode() ?? 0);
-#else
-                        h = (h * 31) + (s?.GetHashCode(StringComparison.Ordinal) ?? 0);
-#endif
-                    }
-                    return h;
-                }
-            }
             if (v is string vs)
             {
 #if NETSTANDARD2_0
@@ -298,5 +376,6 @@ public sealed class EvaluationSummaryCollector
     {
         public long Count { get; set; }
         public int Reason { get; set; }
+        public object Payload { get; set; } = string.Empty;
     }
 }
