@@ -10,8 +10,8 @@ namespace Quonfig.Sdk.Tests;
 /// <summary>
 /// qfg-goi1.2.15 item 5: an ENV_VAR value that cannot be converted to the config's type must not
 /// appear in the exception message or in <c>ErrorMessage</c> (customers and the OpenFeature provider
-/// log both). The message names the environment variable, the target type and the config key, as
-/// sdk-go's Wave 1 fix does.
+/// log both). The message names the environment variable, the target type (its wire name) and the
+/// config key in sdk-go's wording (sdk-go 4178377, qfg-goi1.2.4), without sdk-go's parser reason.
 /// </summary>
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Reliability", "CA2007",
@@ -64,6 +64,16 @@ public sealed class EnvValueRedactionTests : IDisposable
         var ex = Assert.Throws<QuonfigCoercionException>(() => client.GetInt(Key));
         ex.Message.Should().NotContain("hunter2");
         ex.Message.Should().Contain(EnvVar).And.Contain(Key);
+    }
+
+    [Fact]
+    public async Task UnconvertibleEnvValue_MessageMatchesTheSdkGoTemplate()
+    {
+        await using var client = await NewClientAsync();
+
+        var ex = Assert.Throws<QuonfigCoercionException>(() => client.GetInt(Key));
+        ex.Message.Should().Be(
+            "environment variable \"" + EnvVar + "\" cannot be converted to int for config \"" + Key + "\"");
     }
 
     [Fact]

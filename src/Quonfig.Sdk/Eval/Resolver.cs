@@ -399,12 +399,29 @@ public sealed class Resolver
         catch (Exception e) when (e is FormatException or OverflowException or JsonException or ArgumentException)
         {
             // Name the variable, the type and the config, never the value: it may be a secret, and
-            // e.Message quotes it too on .NET 8. The inner exception is kept (qfg-goi1.2.15, sdk-go
-            // wording).
+            // e.Message quotes it too on .NET 8. Same wording and wire type name as sdk-go
+            // (qfg-goi1.2.4); sdk-go's sanitized parser reason has no safe .NET equivalent, so the
+            // parser exception is kept as the inner exception instead (qfg-goi1.2.15).
             throw new QuonfigCoercionException(
-                $"cannot convert environment variable \"{envVar}\" to {target} for config \"{configKey}\"", e);
+                $"environment variable \"{envVar}\" cannot be converted to {WireName(target)} for config \"{configKey}\"", e);
         }
     }
+
+    // The config-file name of a value type ("int", "string_list", ...), as sdk-go prints it.
+    private static string WireName(ValueType t) => t switch
+    {
+        ValueType.Bool => "bool",
+        ValueType.Int => "int",
+        ValueType.Double => "double",
+        ValueType.String => "string",
+        ValueType.StringList => "string_list",
+        ValueType.LogLevel => "log_level",
+        ValueType.Duration => "duration",
+        ValueType.Json => "json",
+        ValueType.WeightedValues => "weighted_values",
+        ValueType.Provided => "provided",
+        _ => t.ToString(),
+    };
 
     private static bool CoerceBool(string raw)
     {
