@@ -36,6 +36,30 @@ public sealed class EnabledTests
         Assert.False(actual);
     }
 
+    [Fact(DisplayName = "returns false for a flag key that does not exist")]
+    public async Task ReturnsFalseForAFlagKeyThatDoesNotExist()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("my-missing-key");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for a flag key that does not exist with a context")]
+    public async Task ReturnsFalseForAFlagKeyThatDoesNotExistWithAContext()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("my-missing-key", new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael", ["email"] = "michael@example.com" } });
+        Assert.False(actual);
+    }
+
     [Fact(DisplayName = "returns true for a PROP_IS_ONE_OF rule when any prop matches")]
     public async Task ReturnsTrueForAPropIsOneOfRuleWhenAnyPropMatches()
     {
