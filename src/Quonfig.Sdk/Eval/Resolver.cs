@@ -223,7 +223,7 @@ public sealed class Resolver
                 $"environment variable \"{pv.Lookup}\" not set for config \"{configKey}\"");
         }
 
-        object coerced = Coerce(raw, configValueType, configKey);
+        object coerced = Coerce(raw, configValueType, configKey, pv.Lookup);
         return new Value(configValueType, coerced, candidate.Confidential, candidate.DecryptWith);
     }
 
@@ -378,7 +378,7 @@ public sealed class Resolver
 
     // ----- Coercion -----
 
-    private static object Coerce(string raw, ValueType target, string configKey)
+    private static object Coerce(string raw, ValueType target, string configKey, string envVar)
     {
         try
         {
@@ -398,8 +398,11 @@ public sealed class Resolver
         }
         catch (Exception e) when (e is FormatException or OverflowException or JsonException or ArgumentException)
         {
+            // Name the variable, the type and the config, never the value: it may be a secret, and
+            // e.Message quotes it too on .NET 8. The inner exception is kept (qfg-goi1.2.15, sdk-go
+            // wording).
             throw new QuonfigCoercionException(
-                $"cannot convert \"{raw}\" to {target} for config \"{configKey}\": {e.Message}", e);
+                $"cannot convert environment variable \"{envVar}\" to {target} for config \"{configKey}\"", e);
         }
     }
 

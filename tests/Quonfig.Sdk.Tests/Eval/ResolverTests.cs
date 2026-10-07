@@ -98,7 +98,10 @@ public sealed class ResolverTests
     {
         var r = new Resolver(envLookup: _ => "maybe");
         var act = () => r.Resolve(Provided("B"), "k", ValueType.Bool, new ContextSet());
-        act.Should().Throw<QuonfigCoercionException>().WithMessage("*maybe*Bool*");
+        // The message names the variable, type and config but never the value (qfg-goi1.2.15).
+        var ex = act.Should().Throw<QuonfigCoercionException>().WithMessage("*\"B\"*Bool*\"k\"*").Which;
+        ex.Message.Should().NotContain("maybe");
+        ex.InnerException.Should().BeOfType<FormatException>();
     }
 
     [Fact]
