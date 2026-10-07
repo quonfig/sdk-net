@@ -65,6 +65,9 @@ public sealed class Quonfig : IQuonfig
     // coercible, decryption failure; qfg-2agi.17). One warning per key per client.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _resolveErrorWarned =
         new(StringComparer.Ordinal);
+
+    // 1 once a telemetry failure on the evaluation path has been logged (qfg-goi1.2.15).
+    private int _telemetryFailureLogged;
     private string? _effectiveEnvironment;
 
     /// <summary>
@@ -236,6 +239,7 @@ public sealed class Quonfig : IQuonfig
                 options.ContextUploadMode,
                 TelemetryDefaults.PositiveOr(options.TelemetryMaxExampleContexts, TelemetryDefaults.MaxExampleContexts),
                 TimeSpan.FromHours(1));
+            _summaries.OnCanonicalFailure = LogTelemetryFailureOnce;
             _failover = new FailoverCollector();
             _telemetryReporter = new TelemetryReporter(
                 telemetrySender,
@@ -1476,8 +1480,18 @@ public sealed class Quonfig : IQuonfig
         // Context telemetry (qfg-gxm6): record the shape / example of the evaluation context on every
         // resolved-config evaluation, mirroring sdk-java. No-op when telemetry is disabled (collectors
         // null) or when ContextUploadMode is None (the collectors self-gate on the mode).
-        _shapes?.Push(effective);
-        _examples?.Push(effective);
+        // Telemetry never throws into a getter (qfg-goi1.2.15).
+#pragma warning disable CA1031 // telemetry containment at the eval boundary; logged once
+        try
+        {
+            _shapes?.Push(effective);
+            _examples?.Push(effective);
+        }
+        catch (Exception ex)
+        {
+            LogTelemetryFailureOnce(ex);
+        }
+#pragma warning restore CA1031
 
         EvaluationMatch match;
         try
@@ -1550,16 +1564,34 @@ public sealed class Quonfig : IQuonfig
         // (lowercase, e.g. "config" / "feature_flag" / "log_level"), matching sdk-node/sdk-go.
         if (_summaries is not null)
         {
-            string? reportable = Eval.Resolver.ReportableValueFor(match.Value);
-            _summaries.Push(new EvaluationStat(
-                match.ConfigId,
-                match.ConfigKey,
-                TryGetType(cfg) ?? string.Empty,
-                match.RuleIndex,
-                match.WeightedValueIndex,
-                typed,
-                reportable,
-                matchReason));
+#pragma warning disable CA1031 // telemetry containment at the eval boundary; logged once (qfg-goi1.2.15)
+            try
+            {
+                string? reportable = Eval.Resolver.ReportableValueFor(match.Value);
+                _summaries.Push(new EvaluationStat(
+                    match.ConfigId,
+                    match.ConfigKey,
+                    TryGetType(cfg) ?? string.Empty,
+                    match.RuleIndex,
+                    match.WeightedValueIndex,
+                    typed,
+                    reportable,
+                    matchReason));
+            }
+            catch (Exception ex)
+            {
+                LogTelemetryFailureOnce(ex);
+            }
+#pragma warning restore CA1031
+        }
+
+        // JSON and string-list values are stored once per config and shared by every evaluation.
+        // Hand the caller its own deep copy, with the same runtime types (Dictionary<string, object?>,
+        // List<object?>, List<string>, string[]), so editing a result cannot change the config for
+        // anyone else (qfg-goi1.2.15). Telemetry above keeps the stored value, which nobody mutates.
+        if (expected == EvalValueType.Json || expected == EvalValueType.StringList)
+        {
+            typed = (T)CopyForCaller(typed)!;
         }
 
         return new EvaluationDetails<T>(
@@ -1844,6 +1876,38 @@ public sealed class Quonfig : IQuonfig
     };
 
     private static object? CoerceJson(object? payload) => payload;
+
+    // Deep copy of a stored JSON / string-list value for the caller (qfg-goi1.2.15). Scalars are
+    // immutable and returned as is.
+    private static object? CopyForCaller(object? value)
+    {
+        switch (value)
+        {
+            case Dictionary<string, object?> dict:
+                var obj = new Dictionary<string, object?>(dict.Count, dict.Comparer);
+                foreach (var kv in dict) obj[kv.Key] = CopyForCaller(kv.Value);
+                return obj;
+            case List<object?> list:
+                var items = new List<object?>(list.Count);
+                foreach (var item in list) items.Add(CopyForCaller(item));
+                return items;
+            case List<string> strings:
+                return new List<string>(strings);
+            case string[] array:
+                return array.Length == 0 ? array : (string[])array.Clone();
+            default:
+                return value;
+        }
+    }
+
+    private void LogTelemetryFailureOnce(Exception ex)
+    {
+        if (Interlocked.Exchange(ref _telemetryFailureLogged, 1) != 0) return;
+        _logger.LogWarning(
+            ex,
+            "quonfig: evaluation telemetry failed ({ExceptionType}); evaluation results are unaffected and later telemetry failures are not logged",
+            ex.GetType().Name);
+    }
 
     private static TimeSpan? CoerceDuration(object? payload) => payload switch
     {

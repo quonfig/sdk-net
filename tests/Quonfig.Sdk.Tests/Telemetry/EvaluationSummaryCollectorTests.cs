@@ -150,6 +150,33 @@ public sealed class EvaluationSummaryCollectorTests
         counters[0]["count"].Should().Be(2L);
     }
 
+    private sealed class ThrowingSequence : System.Collections.IEnumerable
+    {
+        public System.Collections.IEnumerator GetEnumerator() =>
+            throw new System.InvalidOperationException("Collection was modified; enumeration operation may not execute.");
+    }
+
+    [Fact]
+    public void push_when_canonical_walk_throws_falls_back_to_a_reference_key_and_reports_once()
+    {
+        // qfg-goi1.2.15 item 7: the canonical-JSON walk runs on the evaluation path. If it throws
+        // (a value mutated mid-walk), Push must not throw into the getter: it keys that value by
+        // reference, as before qfg-goi1.2.2, and reports the failure once.
+        var failures = new List<System.Exception>();
+        var c = new EvaluationSummaryCollector(enabled: true) { OnCanonicalFailure = failures.Add };
+        var value = new ThrowingSequence();
+        var act = () =>
+        {
+            c.Push(Stat(configKey: "json.bad", selectedValue: value));
+            c.Push(Stat(configKey: "json.bad", selectedValue: value));
+        };
+        act.Should().NotThrow();
+        failures.Should().HaveCount(1);
+        var counters = Counters(c.Drain()!, "json.bad");
+        counters.Should().HaveCount(1, "the same reference shares one counter");
+        counters[0]["count"].Should().Be(2L);
+    }
+
     [Fact]
     public void cap_bounds_total_counters_and_existing_counters_keep_counting()
     {

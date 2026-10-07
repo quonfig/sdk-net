@@ -31,6 +31,7 @@ public sealed class EvaluationSummaryCollector
     private readonly Dictionary<SummaryKey, Dictionary<CounterKey, CounterCell>> _data = new();
     private int _counterCount;
     private long? _startAtMs;
+    private int _canonicalFailureReported;
 
     /// <summary>Initializes a new collector with a default 10,000-row cap.</summary>
     public EvaluationSummaryCollector(bool enabled) : this(enabled, 10_000) { }
@@ -44,6 +45,12 @@ public sealed class EvaluationSummaryCollector
 
     /// <summary>True when this collector accepts pushes; false when constructed with <c>enabled=false</c>.</summary>
     public bool IsEnabled => _enabled;
+
+    /// <summary>
+    /// Called at most once per collector when the canonical-JSON walk of a selected value throws
+    /// (qfg-goi1.2.15); the client logs it. The value is then counted by reference.
+    /// </summary>
+    internal Action<Exception>? OnCanonicalFailure { get; set; }
 
     /// <summary>Cap on distinct counters per window; existing counters keep counting at the cap.</summary>
     internal int MaxDataSize => _maxDataSize;
@@ -73,7 +80,7 @@ public sealed class EvaluationSummaryCollector
         string wrapper = redacted ? "string" : WrapperKeyForValue(stat.SelectedValue);
         object payload = redacted ? stat.ReportableValue! : stat.SelectedValue!;
         // Canonical text is computed outside the lock: it is per-evaluation work for JSON values.
-        string? canonical = IsScalar(payload) ? null : CanonicalJson(payload);
+        string? canonical = IsScalar(payload) ? null : TryCanonicalJson(payload);
 
         var ck = new CounterKey(stat.ConfigId, stat.RuleIndex, wrapper, canonical ?? payload, canonical is not null, stat.WeightedValueIndex);
 
@@ -197,6 +204,28 @@ public sealed class EvaluationSummaryCollector
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
+    // Push runs on the evaluation path, so the walk must not throw into a getter (qfg-goi1.2.15). If it
+    // does (for example a caller mutates the value during the walk), report it once and return null:
+    // the value is then keyed by reference, as it was before canonical grouping.
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Telemetry must never throw into a getter; the failure is reported, not swallowed.")]
+    private string? TryCanonicalJson(object value)
+    {
+        try
+        {
+            return CanonicalJson(value);
+        }
+        catch (Exception ex)
+        {
+            if (System.Threading.Interlocked.Exchange(ref _canonicalFailureReported, 1) == 0)
+            {
+                OnCanonicalFailure?.Invoke(ex);
+            }
+            return null;
+        }
+    }
+
     // Depth guard: a self-referencing collection must not overflow the stack.
     private const int MaxCanonicalDepth = 64;
 
@@ -300,7 +329,8 @@ public sealed class EvaluationSummaryCollector
     private readonly struct CounterKey : IEquatable<CounterKey>
     {
         // GroupValue is the selected value itself for scalars, or its canonical JSON text for
-        // non-scalars (IsCanonical = true), so equality is by value, never by reference.
+        // non-scalars (IsCanonical = true), so equality is by value. The one exception: a non-scalar
+        // whose canonical walk threw is keyed by reference (IsCanonical = false; qfg-goi1.2.15).
         public CounterKey(string configId, int ruleIndex, string wrapper, object groupValue, bool isCanonical, int weightedValueIndex)
         {
             ConfigId = configId;
