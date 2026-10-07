@@ -1480,11 +1480,19 @@ public sealed class Quonfig : IQuonfig
         // Context telemetry (qfg-gxm6): record the shape / example of the evaluation context on every
         // resolved-config evaluation, mirroring sdk-java. No-op when telemetry is disabled (collectors
         // null) or when ContextUploadMode is None (the collectors self-gate on the mode).
-        // Telemetry never throws into a getter (qfg-goi1.2.15).
+        // Telemetry never throws into a getter (qfg-goi1.2.15). Each collector is guarded on its
+        // own, so a failure in one does not skip the other.
 #pragma warning disable CA1031 // telemetry containment at the eval boundary; logged once
         try
         {
             _shapes?.Push(effective);
+        }
+        catch (Exception ex)
+        {
+            LogTelemetryFailureOnce(ex);
+        }
+        try
+        {
             _examples?.Push(effective);
         }
         catch (Exception ex)

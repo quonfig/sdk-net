@@ -187,6 +187,31 @@ public sealed class ReturnedValueIsolationTests : IDisposable
         public override object ToObject() => throw new InvalidOperationException("boom from telemetry");
     }
 
+    // A shape-telemetry failure must not skip the example-context push for the same evaluation:
+    // the two collectors are guarded separately (qfg-goi1.2.15 review).
+    private sealed record ShapeOnlyExplodingValue : ContextValue
+    {
+        public override string Type => throw new InvalidOperationException("boom from shape telemetry");
+
+        public override object ToObject() => "fine";
+    }
+
+    [Fact]
+    public async Task ShapeTelemetryFailure_DoesNotSkipTheExampleContext()
+    {
+        var logger = new CaptureLogger();
+        await using var client = await NewClientAsync(logger);
+        var ctx = new ContextSet
+        {
+            ["user"] = new ContextProperties { ["key"] = "alice", ["boom"] = new ShapeOnlyExplodingValue() },
+        };
+
+        client.GetJsonDetails(JsonKey, ctx).Reason.Should().NotBe(Reason.Error);
+
+        logger.LogCount(MelLogLevel.Warning, "telemetry").Should().Be(1);
+        client.ExampleContexts!.Drain().Should().NotBeNull("the example push runs even when the shape push threw");
+    }
+
     [Fact]
     public async Task TelemetryFailure_NeverEscapesAGetter_AndIsLoggedOnce()
     {
