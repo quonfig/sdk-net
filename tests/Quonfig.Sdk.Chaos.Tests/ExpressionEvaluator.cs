@@ -171,7 +171,11 @@ internal sealed class ExpressionEvaluator
         {
             var metric = m.Groups[1].Value;
             var layer = m.Groups[2].Success ? m.Groups[2].Value : null;
-            var got = _probe.SdkMetric(metric, layer);
+            var (got, known) = _probe.SdkMetric(metric, layer);
+            if (!known)
+            {
+                return new Result(false, "unknown sdkMetric \"" + metric + "\": the chaos probe does not implement it");
+            }
             var want = double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
             var op = m.Groups[3].Value;
             var ok = CompareDouble(op, got, want);

@@ -377,7 +377,7 @@ public sealed class ChaosTests
             }
         }
         _out.WriteLine(
-            $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped (state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1")}, fallback={probe.FallbackPollerActive()}, lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
+            $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped (state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1").Value}, fallback={probe.FallbackPollerActive()}, lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
 
         if (failures.Count > 0)
         {

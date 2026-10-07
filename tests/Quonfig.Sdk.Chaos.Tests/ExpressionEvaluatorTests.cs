@@ -58,6 +58,17 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
+    public void SdkMetricUnknownName_FailsLoudlyInsteadOfComparingAgainstZero()
+    {
+        // A metric the probe does not implement used to read as 0, so "== 0" (or "< 100")
+        // passed without checking anything. It must fail and name the metric (qfg-goi1.2.23).
+        var ev = new ExpressionEvaluator(new ChaosProbe());
+        var r = ev.Evaluate("client.sdkMetric('typo_total') == 0");
+        Assert.Equal(ExpressionEvaluator.Verdict.Fail, r.Outcome);
+        Assert.Contains("unknown sdkMetric \"typo_total\"", r.Reason);
+    }
+
+    [Fact]
     public void SdkLogMatchesRegexCaseInsensitive()
     {
         var probe = new ChaosProbe();

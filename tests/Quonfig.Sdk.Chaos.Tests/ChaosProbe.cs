@@ -116,21 +116,23 @@ internal sealed class ChaosProbe
 
     /// <summary>
     /// Returns the probe's count of the named SDK metric. Layer "1" tracks SSE worker restarts;
-    /// layer "2" tracks Layer 2 fallback poller restarts. Unknown metrics return 0.
+    /// layer "2" tracks Layer 2 fallback poller restarts. <c>Known</c> is false for a metric name
+    /// the probe does not implement, so the evaluator fails the expectation loudly instead of
+    /// comparing against a silent 0.
     /// </summary>
-    public double SdkMetric(string name, string? layer)
+    public (double Value, bool Known) SdkMetric(string name, string? layer)
     {
         lock (_lock)
         {
             return name switch
             {
-                "quonfig_sdk_worker_restart_total" => layer switch
+                "quonfig_sdk_worker_restart_total" => (layer switch
                 {
                     "1" => _restartLayer1,
                     "2" => _restartLayer2,
                     _ => _restartLayer1 + _restartLayer2,
-                },
-                _ => 0,
+                }, true),
+                _ => (0, false),
             };
         }
     }
