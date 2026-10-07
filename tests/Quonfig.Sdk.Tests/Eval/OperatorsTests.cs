@@ -143,6 +143,23 @@ public sealed class OperatorsTests
         Operators.EvaluateCriterion("anything", true, c, null).Should().BeFalse();
     }
 
+    // qfg-goi1.2.15 item 3: a catastrophic-backtracking pattern must not pin the caller's thread.
+    // The match runs with a timeout; a timeout fails closed (the criterion does not match), like an
+    // invalid pattern.
+    [Theory]
+    [InlineData(Operators.PROP_MATCHES)]
+    [InlineData(Operators.PROP_DOES_NOT_MATCH)]
+    public void PropMatches_CatastrophicBacktracking_TimesOutAndFailsClosed(string op)
+    {
+        var c = Crit(op, "x", Str("^(a+)+$"));
+        var input = new string('a', 28) + "!";
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Operators.EvaluateCriterion(input, true, c, null).Should().BeFalse();
+        sw.Stop();
+        sw.Elapsed.Should().BeLessThan(System.TimeSpan.FromSeconds(2),
+            "the regex match must be bounded by a timeout instead of backtracking for seconds");
+    }
+
     // ----- HIERARCHICAL_MATCH -----
 
     [Fact]

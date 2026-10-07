@@ -21,6 +21,10 @@ namespace Quonfig.Sdk.Eval;
     Justification = "Name is the cross-SDK contract — matches sdk-java's com.quonfig.sdk.eval.Operators.")]
 public static class Operators
 {
+    // Bound on one PROP_MATCHES / PROP_DOES_NOT_MATCH evaluation (qfg-goi1.2.15). .NET's regex engine
+    // backtracks, so a pathological pattern could otherwise run for seconds on the caller's thread.
+    private static readonly TimeSpan RegexMatchTimeout = TimeSpan.FromMilliseconds(100);
+
 #pragma warning disable CA1707 // operator names are wire-level constants — must match across SDKs
     /// <summary>NOT_SET — never matches (placeholder operator).</summary>
     public const string NOT_SET = "NOT_SET";
@@ -198,8 +202,14 @@ public static class Operators
                     {
                         try
                         {
-                            var matched = Regex.IsMatch(cv, pattern);
+                            var matched = Regex.IsMatch(cv, pattern, RegexOptions.None, RegexMatchTimeout);
                             return matched == (op == PROP_MATCHES);
+                        }
+                        catch (RegexMatchTimeoutException)
+                        {
+                            // Catastrophic backtracking (ReDoS) — fail closed, like an invalid
+                            // pattern, instead of pinning the caller's thread (qfg-goi1.2.15).
+                            return false;
                         }
                         catch (ArgumentException)
                         {
