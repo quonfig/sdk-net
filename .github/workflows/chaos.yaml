@@ -61,12 +61,10 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          # Pinned per the 2026-05-13 reliability audit so the chaos gate moves
-          # only when the scenarios are deliberately rev'd. Matches the
-          # sdk-go/sdk-node/sdk-ruby/sdk-python chaos.yaml pins — bump alongside
-          # the matching SDK change. (failover-chaos.yaml pins a newer tag for
-          # its own corpus; the two are independent.)
-          ref: v2026.05.13
+          # Pinned so the chaos gate moves only when the scenarios are deliberately rev'd. Keep it
+          # equal to test.yaml's unit pin and failover-chaos.yaml (one ITD tag per repo,
+          # qfg-goi1.1.5).
+          ref: v2026.10.03
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A
@@ -82,6 +80,21 @@ jobs:
           path: api-delivery
           ref: main
           token: ${{ secrets.QUONFIG_REPO_TOKEN }}
+
+      - name: Record api-delivery SHA
+        # api-delivery deliberately tracks main here (Decision 8, qfg-goi1): the chaos runs exist
+        # to catch api-delivery drift. Write the resolved SHA to the run summary so a red run names
+        # the exact server build.
+        if: env.HAS_REPO_TOKEN == 'true'
+        run: |
+          sha="$(git -C api-delivery rev-parse HEAD)"
+          echo "api-delivery @main resolved to ${sha}"
+          {
+            echo "### Chaos inputs"
+            echo ""
+            echo "- api-delivery: \`main\` @ \`${sha}\`"
+            echo "- integration-test-data: \`$(git -C integration-test-data describe --tags --always)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup .NET 8
         if: env.HAS_REPO_TOKEN == 'true'

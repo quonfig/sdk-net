@@ -60,11 +60,10 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          # Pinned to the corpus tag carrying the reframed o01 (fast primary wins, secondary never
-          # contacted), the new o05 (slow older primary loses to fast newer secondary), and o03 (heal
-          # forward) — the parallel-failover hedge scenarios (qfg-7h5d.1.14). Matches test.yaml's
-          # pinning rationale.
-          ref: v2026.06.19.1
+          # Pinned to the same tag as chaos.yaml and test.yaml's unit pin (one ITD tag per repo,
+          # qfg-goi1.1.5). The tag carries the parallel-failover hedge corpus (reframed o01, o03
+          # heal forward, o05 secondary newer; qfg-7h5d.1.14).
+          ref: v2026.10.03
 
       - name: Checkout api-delivery
         # api-delivery is private; the default GITHUB_TOKEN cannot read it. A PAT / fine-grained
@@ -79,6 +78,21 @@ jobs:
           path: api-delivery
           ref: main
           token: ${{ secrets.QUONFIG_REPO_TOKEN }}
+
+      - name: Record api-delivery SHA
+        # api-delivery deliberately tracks main here (Decision 8, qfg-goi1): the chaos runs exist
+        # to catch api-delivery drift. Write the resolved SHA to the run summary so a red run names
+        # the exact server build.
+        if: env.HAS_REPO_TOKEN == 'true'
+        run: |
+          sha="$(git -C api-delivery rev-parse HEAD)"
+          echo "api-delivery @main resolved to ${sha}"
+          {
+            echo "### Failover chaos inputs"
+            echo ""
+            echo "- api-delivery: \`main\` @ \`${sha}\`"
+            echo "- integration-test-data: \`$(git -C integration-test-data describe --tags --always)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup .NET 8
         if: env.HAS_REPO_TOKEN == 'true'
