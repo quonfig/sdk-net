@@ -66,6 +66,11 @@ public sealed class Quonfig : IQuonfig
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _resolveErrorWarned =
         new(StringComparer.Ordinal);
 
+    // Config keys already warned about a PROP_MATCHES regex timeout (qfg-goi1.2.15). One warning
+    // per key per client.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _regexTimeoutWarned =
+        new(StringComparer.Ordinal);
+
     // 1 once a telemetry failure on the evaluation path has been logged (qfg-goi1.2.15).
     private int _telemetryFailureLogged;
     private string? _effectiveEnvironment;
@@ -985,9 +990,7 @@ public sealed class Quonfig : IQuonfig
         if (_store is not null) return;
         var store = new ConfigStore();
         _store = store;
-        _evaluator = _opts.EnvLookup is null
-            ? new Evaluator(store)
-            : new Evaluator(store, new Resolver.EnvLookup(_opts.EnvLookup));
+        _evaluator = NewEvaluator(store);
     }
 
     private void StartSse()
@@ -1378,9 +1381,7 @@ public sealed class Quonfig : IQuonfig
             // Build the evaluator the first time we have a store. Subsequent updates re-use the
             // same evaluator — ConfigStore.Update atomically swaps the underlying map so the
             // evaluator's _store reference always sees the latest snapshot.
-            _evaluator = _opts.EnvLookup is null
-                ? new Evaluator(store)
-                : new Evaluator(store, new Resolver.EnvLookup(_opts.EnvLookup));
+            _evaluator = NewEvaluator(store);
         }
         lock (_stateLock)
         {
@@ -1906,6 +1907,25 @@ public sealed class Quonfig : IQuonfig
             default:
                 return value;
         }
+    }
+
+    private Evaluator NewEvaluator(ConfigStore store)
+    {
+        var evaluator = _opts.EnvLookup is null
+            ? new Evaluator(store)
+            : new Evaluator(store, new Resolver.EnvLookup(_opts.EnvLookup));
+        evaluator.OnRegexTimeout = WarnRegexTimeoutOnce;
+        return evaluator;
+    }
+
+    // A timed-out regex fails closed, so a rule that always times out never matches. Say so once per
+    // config key. The context value is never logged: it may be sensitive.
+    private void WarnRegexTimeoutOnce(string configKey, string propertyName)
+    {
+        if (!_regexTimeoutWarned.TryAdd(configKey, 0)) return;
+        _logger.LogWarning(
+            "quonfig: config \"{Key}\": a regex match on property \"{Property}\" timed out; the criterion is treated as not matching. Later timeouts for this config are not logged",
+            configKey, propertyName);
     }
 
     private void LogTelemetryFailureOnce(Exception ex)

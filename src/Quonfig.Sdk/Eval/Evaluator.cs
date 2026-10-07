@@ -22,6 +22,13 @@ public sealed class Evaluator
     private readonly ConditionalWeakTable<ConfigResponse, ConfigRow> _parsed = new();
 
     /// <summary>
+    /// Called with the config key and property name when a <c>PROP_MATCHES</c> /
+    /// <c>PROP_DOES_NOT_MATCH</c> regex times out and the criterion fails closed
+    /// (qfg-goi1.2.15). The client logs it.
+    /// </summary>
+    internal Action<string, string>? OnRegexTimeout { get; set; }
+
+    /// <summary>
     /// Initializes a new evaluator. <paramref name="store"/> is required for
     /// <c>IN_SEG</c>/<c>NOT_IN_SEG</c> recursion and for decryption-key lookup; if null, those
     /// operators behave as "segment not found" (sdk-java/sdk-go fall-back semantics).
@@ -199,7 +206,9 @@ public sealed class Evaluator
             };
         }
 
-        return Operators.EvaluateCriterion(rawValue, lookup.Exists, criterion, segResolver);
+        var result = Operators.EvaluateCriterion(rawValue, lookup.Exists, criterion, segResolver, out var regexTimedOut);
+        if (regexTimedOut) OnRegexTimeout?.Invoke(currentKey, criterion.PropertyName ?? "");
+        return result;
     }
 
     // The key config is evaluated in the same environment as the config being decrypted, so an

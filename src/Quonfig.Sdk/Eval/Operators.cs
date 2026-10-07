@@ -13,7 +13,7 @@ namespace Quonfig.Sdk.Eval;
 /// in lock-step with the sibling SDKs.
 ///
 /// <para>Numeric operators coerce both sides to <see cref="double"/>; coercion failure returns
-/// false (we never throw out of <see cref="EvaluateCriterion"/>). String operators take the
+/// false (we never throw out of <see cref="EvaluateCriterion(object?, bool, Criterion, SegmentResolver?)"/>). String operators take the
 /// CLR value as-is — strings, lists, primitives — and use ordinal comparison so locale doesn't
 /// affect rule matching.</para>
 /// </summary>
@@ -102,8 +102,22 @@ public static class Operators
         object? contextValue,
         bool contextExists,
         Criterion criterion,
-        SegmentResolver? segmentResolver)
+        SegmentResolver? segmentResolver) =>
+        EvaluateCriterion(contextValue, contextExists, criterion, segmentResolver, out _);
+
+    /// <summary>
+    /// As <see cref="EvaluateCriterion(object?, bool, Criterion, SegmentResolver?)"/>, and reports
+    /// whether a <see cref="PROP_MATCHES"/> / <see cref="PROP_DOES_NOT_MATCH"/> regex hit its match
+    /// timeout, so the client can log it (qfg-goi1.2.15).
+    /// </summary>
+    internal static bool EvaluateCriterion(
+        object? contextValue,
+        bool contextExists,
+        Criterion criterion,
+        SegmentResolver? segmentResolver,
+        out bool regexTimedOut)
     {
+        regexTimedOut = false;
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(criterion);
 #else
@@ -208,7 +222,9 @@ public static class Operators
                         catch (RegexMatchTimeoutException)
                         {
                             // Catastrophic backtracking (ReDoS) — fail closed, like an invalid
-                            // pattern, instead of pinning the caller's thread (qfg-goi1.2.15).
+                            // pattern, instead of pinning the caller's thread (qfg-goi1.2.15). The
+                            // caller logs the timeout.
+                            regexTimedOut = true;
                             return false;
                         }
                         catch (ArgumentException)
