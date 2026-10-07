@@ -24,11 +24,17 @@ public sealed class Resolver
     /// <summary>Callback signature for resolving an AES-GCM decryption key config to its value.</summary>
     public delegate Value? KeyResolver(string configKey, ContextSet contexts);
 
+    // Environment-aware form of KeyResolver used by Evaluator so the decrypt-key config is
+    // evaluated in the same environment as the config being decrypted (sdk-go
+    // runtime_resolver.go resolveDecryption passes envID; qfg-goi1.2.14). Internal so the public
+    // KeyResolver delegate and the public Resolve overloads keep their shape.
+    internal delegate Value? EnvKeyResolver(string configKey, ContextSet contexts, string? environmentId);
+
     /// <summary>Callback signature for env-var lookup. Returning null means the var is unset.</summary>
     public delegate string? EnvLookup(string name);
 
     private readonly EnvLookup _envLookup;
-    private readonly KeyResolver _keyResolver;
+    private readonly EnvKeyResolver _keyResolver;
 
     /// <summary>
     /// Initializes a new resolver. Both callbacks are optional; the default
@@ -39,7 +45,21 @@ public sealed class Resolver
     public Resolver(EnvLookup? envLookup = null, KeyResolver? keyResolver = null)
     {
         _envLookup = envLookup ?? (name => Environment.GetEnvironmentVariable(name));
-        _keyResolver = keyResolver ?? ((_, _) => null);
+        if (keyResolver is null)
+        {
+            _keyResolver = (_, _, _) => null;
+        }
+        else
+        {
+            _keyResolver = (configKey, contexts, _) => keyResolver(configKey, contexts);
+        }
+    }
+
+    // Used by Evaluator: the key resolver receives the effective environment id.
+    internal Resolver(EnvLookup? envLookup, EnvKeyResolver keyResolver)
+    {
+        _envLookup = envLookup ?? (name => Environment.GetEnvironmentVariable(name));
+        _keyResolver = keyResolver;
     }
 
     /// <summary>Prefix on the redacted telemetry marker for confidential / encrypted values.</summary>
@@ -123,7 +143,7 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out _, null);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out _, null, null);
     }
 
     /// <summary>
@@ -136,7 +156,18 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex, out string? missingHashPropertyName)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null, null);
+    }
+
+    /// <summary>
+    /// Same as the public overload, evaluating any <c>decryptWith</c> key config in
+    /// <paramref name="environmentId"/> (qfg-goi1.2.14). Used by <see cref="Evaluator"/>.
+    /// </summary>
+    internal Value Resolve(
+        Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
+        string? environmentId, out int weightedValueIndex, out string? missingHashPropertyName)
+    {
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null, environmentId);
     }
 
     // keyPath: the config keys already being resolved above this one through decryptWith. A
@@ -145,7 +176,7 @@ public sealed class Resolver
     // uncatchable StackOverflowException (qfg-9dxb.7, sdk-go qfg-9dxb.4). Null at the top level.
     private Value Resolve(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath)
+        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath, string? environmentId)
     {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(candidate);
@@ -167,12 +198,12 @@ public sealed class Resolver
 
         if (candidate.Type == ValueType.WeightedValues)
         {
-            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, keyPath);
+            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, keyPath, environmentId);
         }
 
         if (candidate.Confidential && !string.IsNullOrEmpty(candidate.DecryptWith))
         {
-            return ResolveDecryption(candidate, configKey, contexts, keyPath);
+            return ResolveDecryption(candidate, configKey, contexts, keyPath, environmentId);
         }
 
         return candidate;
@@ -200,7 +231,7 @@ public sealed class Resolver
 
     private Value ResolveWeighted(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath)
+        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath, string? environmentId)
     {
         weightedValueIndex = -1;
         missingHashPropertyName = null;
@@ -232,7 +263,7 @@ public sealed class Resolver
 
         // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc. The bucket
         // index is the one we just picked — inner resolution doesn't change it.
-        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, keyPath);
+        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, keyPath, environmentId);
     }
 
     // Random source for rollouts with no hashByPropertyName (qfg-t9wo). System.Random is not
@@ -282,7 +313,8 @@ public sealed class Resolver
 
     // ----- Decryption -----
 
-    private Value ResolveDecryption(Value candidate, string configKey, ContextSet contexts, string[]? keyPath)
+    private Value ResolveDecryption(
+        Value candidate, string configKey, ContextSet contexts, string[]? keyPath, string? environmentId)
     {
         keyPath = Append(keyPath, configKey);
         if (Array.IndexOf(keyPath, candidate.DecryptWith) >= 0)
@@ -291,7 +323,7 @@ public sealed class Resolver
                 $"decryption key config \"{candidate.DecryptWith}\" is part of a decryptWith cycle");
         }
 
-        Value? keyValue = _keyResolver(candidate.DecryptWith!, contexts);
+        Value? keyValue = _keyResolver(candidate.DecryptWith!, contexts, environmentId);
         if (keyValue is null)
         {
             throw new QuonfigDecryptionException(
@@ -302,7 +334,7 @@ public sealed class Resolver
         try
         {
             // The key config can itself be PROVIDED — recurse so the env-var lookup happens.
-            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, out _, keyPath);
+            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, out _, keyPath, environmentId);
         }
         catch (QuonfigException e)
         {

@@ -32,7 +32,7 @@ public sealed class Evaluator
     public Evaluator(ConfigStore? store, Resolver? resolver = null)
     {
         _store = store;
-        _resolver = resolver ?? new Resolver(keyResolver: ResolveKey);
+        _resolver = resolver ?? new Resolver(null, ResolveKey);
     }
 
     /// <summary>
@@ -44,7 +44,7 @@ public sealed class Evaluator
     public Evaluator(ConfigStore? store, Resolver.EnvLookup envLookup)
     {
         _store = store;
-        _resolver = new Resolver(envLookup: envLookup, keyResolver: ResolveKey);
+        _resolver = new Resolver(envLookup, ResolveKey);
     }
 
     /// <summary>
@@ -78,19 +78,19 @@ public sealed class Evaluator
             var env = row.FindEnvironment(environmentId);
             if (env is not null)
             {
-                var m = EvaluateRules(row, env.Rules, contexts, segPath);
+                var m = EvaluateRules(row, env.Rules, contexts, environmentId, segPath);
                 if (m is not null) return m;
             }
         }
 
-        var def = EvaluateRules(row, row.DefaultRules, contexts, segPath);
+        var def = EvaluateRules(row, row.DefaultRules, contexts, environmentId, segPath);
         if (def is not null) return def;
 
         return EvaluationMatch.NoMatch(row.Id, row.Key, row.ValueType);
     }
 
     private EvaluationMatch? EvaluateRules(
-        ConfigRow row, IReadOnlyList<Rule> rules, ContextSet contexts, string[]? segPath)
+        ConfigRow row, IReadOnlyList<Rule> rules, ContextSet contexts, string? environmentId, string[]? segPath)
     {
         for (int i = 0; i < rules.Count; i++)
         {
@@ -102,7 +102,7 @@ public sealed class Evaluator
             // caller can surface the right error code. weightedIndex is >= 0 only when a
             // weighted-values bucket was chosen.
             var resolved = _resolver.Resolve(
-                rule.Value, row.Key, row.ValueType, contexts, out int weightedIndex, out string? missingHashProperty);
+                rule.Value, row.Key, row.ValueType, contexts, environmentId, out int weightedIndex, out string? missingHashProperty);
 
             // Canonical reason (mirrors sdk-go runtime_eval.go hasTargetingRules + integration-test-data
             // telemetry.yaml): SPLIT when a weighted bucket was resolved; otherwise STATIC only when
@@ -202,7 +202,9 @@ public sealed class Evaluator
         return Operators.EvaluateCriterion(rawValue, lookup.Exists, criterion, segResolver);
     }
 
-    private Value? ResolveKey(string configKey, ContextSet contexts)
+    // The key config is evaluated in the same environment as the config being decrypted, so an
+    // environment-scoped key rule applies (sdk-go runtime_resolver.go; qfg-goi1.2.14).
+    private Value? ResolveKey(string configKey, ContextSet contexts, string? environmentId)
     {
         if (_store is null) return null;
         var keyConfig = _store.Get(configKey);
@@ -210,7 +212,7 @@ public sealed class Evaluator
         // Get the unresolved candidate value from the matching rule; the outer Resolver call
         // will recurse to handle PROVIDED on the key config itself.
         var row = GetOrParse(keyConfig);
-        var match = EvaluateMatchedRuleRaw(row, contexts, "");
+        var match = EvaluateMatchedRuleRaw(row, contexts, environmentId);
         return match;
     }
 
