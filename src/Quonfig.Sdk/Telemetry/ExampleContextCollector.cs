@@ -72,7 +72,10 @@ public sealed class ExampleContextCollector
             }
 
             _timestamps.Add(now);
-            _data.Add(contexts);
+            // Snapshot only once the example is kept (rate limit and cap passed), so the copy costs
+            // one per example, not one per evaluation. The caller's set is often its own object
+            // (no GlobalContext) and may be edited after the evaluation (qfg-goi1.2.15).
+            _data.Add(Snapshot(contexts));
             _seen[key] = now;
         }
     }
@@ -123,6 +126,19 @@ public sealed class ExampleContextCollector
             PruneCache();
             return ev;
         }
+    }
+
+    // Two-level copy: the named contexts and their property maps. ContextValue records are immutable.
+    private static ContextSet Snapshot(ContextSet contexts)
+    {
+        var copy = new ContextSet();
+        foreach (var named in contexts)
+        {
+            var props = new ContextProperties();
+            foreach (var p in named.Value) props[p.Key] = p.Value;
+            copy[named.Key] = props;
+        }
+        return copy;
     }
 
     private static string GroupedKey(ContextSet contexts)

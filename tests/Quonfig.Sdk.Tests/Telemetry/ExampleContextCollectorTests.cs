@@ -47,6 +47,28 @@ public sealed class ExampleContextCollectorTests
     }
 
     [Fact]
+    public void push_snapshots_the_context_so_later_caller_edits_are_not_sent()
+    {
+        // qfg-goi1.2.15 item 4: the example is the context as it was at evaluation time. The
+        // collector used to keep a reference to the caller's ContextSet and serialize it at drain.
+        var c = new ExampleContextCollector(ContextUploadMode.PeriodicExample);
+        var ctx = WithUserKey("alice");
+        c.Push(ctx);
+
+        ctx["user"]["plan"] = "MUTATED";
+        ctx["user"]["extra"] = "added-later";
+        ctx["team"] = new ContextProperties { ["key"] = "t1" };
+
+        var env = c.Drain()!;
+        var examples = (List<Dictionary<string, object?>>)((Dictionary<string, object?>)env["exampleContexts"]!)["examples"]!;
+        var contexts = (List<Dictionary<string, object?>>)((Dictionary<string, object?>)examples[0]["contextSet"]!)["contexts"]!;
+        contexts.Should().HaveCount(1, "a context added after the evaluation is not part of the example");
+        var values = (Dictionary<string, object?>)contexts[0]["values"]!;
+        values["plan"].Should().Be("pro");
+        values.Should().NotContainKey("extra");
+    }
+
+    [Fact]
     public void push_rate_limits_repeated_identical_keys_within_window()
     {
         var c = new ExampleContextCollector(
