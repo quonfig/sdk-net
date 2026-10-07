@@ -1637,7 +1637,8 @@ public sealed class Quonfig : IQuonfig
         {
             if (_resolveErrorWarned.TryAdd(key, 0))
             {
-                // A coercion message quotes the raw value, which may be sensitive; keep it out of logs.
+                // A coercion message can carry a parser message that quotes the value (a stored value
+                // can be sensitive too), so log a fixed reason instead.
                 var why = resolveError is QuonfigCoercionException
                     ? "value cannot be converted to the config's declared type"
                     : resolveError.Message;
