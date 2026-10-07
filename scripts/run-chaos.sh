@@ -53,6 +53,29 @@ if [[ ! -x "$DOTNET" ]]; then
   fi
 fi
 
+# Print the run-end "skipped expressions" tally from the runner's skip log, and append it to the
+# GitHub job summary when running in Actions.
+print_skip_tally() {
+  local log="$1" total
+  total="$( [[ -s "$log" ]] && wc -l <"$log" | tr -d ' ' || echo 0 )"
+  echo "==> chaos skipped expressions: $total"
+  if [[ "$total" != "0" ]]; then
+    awk -F'\t' '{ printf "    SKIP  %s %s: %s — SKIPPED: %s\n", $1, $2, $3, $4 }' "$log"
+  fi
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+      echo "### Chaos skipped expressions: $total"
+      echo ""
+      if [[ "$total" != "0" ]]; then
+        echo "| count | expression | reason |"
+        echo "|---|---|---|"
+        awk -F'\t' '{ print $3 "\t" $4 }' "$log" | sort | uniq -c \
+          | awk '{ n = $1; sub(/^ *[0-9]+ /, ""); split($0, f, "\t"); printf "| %s | `%s` | %s |\n", n, f[1], f[2] }'
+      fi
+    } >>"$GITHUB_STEP_SUMMARY"
+  fi
+}
+
 cleanup_done=0
 cleanup() {
   if [[ "$cleanup_done" == "1" ]]; then return; fi
@@ -102,10 +125,20 @@ CHAOS_UPSTREAM_HOST=host.docker.internal \
 
 echo "==> running chaos scenarios via dotnet test"
 cd "$SDK_NET_DIR"
+# The runner appends one line per skipped expression leaf (scenario, exp[i], expression, reason)
+# to CHAOS_SKIP_LOG; the tally below prints it after the run (qfg-goi1.1.5). A skipped
+# expectation is never counted as a pass, so the run must say what it did not check.
+SKIP_LOG="$(mktemp "${TMPDIR:-/tmp}/sdk-net-chaos-skips.XXXXXX")"
+rc=0
 QUONFIG_CHAOS_RUN=1 \
   CHAOS_API_DELIVERY_URL="http://127.0.0.1:$API_PORT" \
   CHAOS_FIXTURE_SDK_KEY="$FIXTURE_KEY" \
+  CHAOS_SKIP_LOG="$SKIP_LOG" \
   "$DOTNET" test tests/Quonfig.Sdk.Chaos.Tests/Quonfig.Sdk.Chaos.Tests.csproj \
     --configuration Release \
     --logger "console;verbosity=normal" \
-    --logger "trx;LogFileName=chaos-results.trx"
+    --logger "trx;LogFileName=chaos-results.trx" || rc=$?
+
+print_skip_tally "$SKIP_LOG"
+rm -f "$SKIP_LOG"
+exit "$rc"

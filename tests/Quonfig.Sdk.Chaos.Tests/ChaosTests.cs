@@ -286,9 +286,17 @@ public sealed class ChaosTests
                 bool allTerminal = true;
                 foreach (var s in states)
                 {
-                    if (s.Passed || s.Failed) continue;
+                    if (s.Passed || s.Failed || s.Skipped) continue;
                     var r = evaluator.Evaluate(s.Exp.AssertExpr);
                     s.LastReason = r.Reason;
+                    s.SkippedLeaves = r.SkippedLeaves;
+                    if (r.Outcome == ExpressionEvaluator.Verdict.Skipped)
+                    {
+                        // The rig cannot evaluate this expectation at all (for example
+                        // server_metric): terminal SKIPPED with the reason, never a pass.
+                        s.Skipped = true;
+                        continue;
+                    }
                     if (r.Passed)
                     {
                         if (s.HeldSince is null) { s.HeldSince = now; s.HitAtMs = elapsedMs; }
@@ -317,7 +325,7 @@ public sealed class ChaosTests
             }
             foreach (var s in states)
             {
-                if (!s.Passed) s.Failed = true;
+                if (!s.Passed && !s.Skipped) s.Failed = true;
             }
         }
         finally
@@ -336,15 +344,29 @@ public sealed class ChaosTests
             }
         }
 
-        int pass = 0, fail = 0;
+        int pass = 0, fail = 0, skipped = 0;
         var failures = new List<string>();
+        var skipLog = ChaosSkipLog.FromEnvironment();
         foreach (var s in states)
         {
-            if (s.Passed)
+            foreach (var note in s.SkippedLeaves)
+            {
+                skipLog.Record(run.Name ?? "(unnamed)", s.Idx, note);
+            }
+            if (s.Skipped)
+            {
+                skipped++;
+                _out.WriteLine(
+                    $"SKIP  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr} — SKIPPED: {string.Join(" | ", s.SkippedLeaves.Select(n => n.Reason).Distinct())}");
+            }
+            else if (s.Passed)
             {
                 pass++;
+                var skippedLeaves = s.SkippedLeaves.Count == 0
+                    ? string.Empty
+                    : "  [not checked: " + string.Join(" | ", s.SkippedLeaves) + "]";
                 _out.WriteLine(
-                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms)");
+                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms){skippedLeaves}");
             }
             else
             {
@@ -355,7 +377,7 @@ public sealed class ChaosTests
             }
         }
         _out.WriteLine(
-            $"scenario summary: {pass} passed, {fail} failed (state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1")}, fallback={probe.FallbackPollerActive()}, lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
+            $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped (state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1")}, fallback={probe.FallbackPollerActive()}, lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
 
         if (failures.Count > 0)
         {
@@ -535,6 +557,9 @@ public sealed class ChaosTests
         public DateTime? HeldSince { get; set; }
         public bool Passed { get; set; }
         public bool Failed { get; set; }
+        public bool Skipped { get; set; }
         public string LastReason { get; set; } = string.Empty;
+        public IReadOnlyList<ExpressionEvaluator.SkipNote> SkippedLeaves { get; set; } =
+            Array.Empty<ExpressionEvaluator.SkipNote>();
     }
 }

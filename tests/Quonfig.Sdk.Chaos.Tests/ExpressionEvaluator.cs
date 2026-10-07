@@ -14,11 +14,55 @@ namespace Quonfig.Sdk.Chaos.Tests;
 /// </summary>
 internal sealed class ExpressionEvaluator
 {
+    /// <summary>
+    /// Tri-state outcome of one expression. <see cref="Skipped"/> means this rig cannot evaluate
+    /// the expression, for a stated reason: a standalone skipped expectation is reported as
+    /// SKIPPED, never PASS. Inside AND/OR a skipped leaf is neutral (it neither satisfies nor
+    /// fails the compound) and the other leaves are still enforced.
+    /// </summary>
+    public enum Verdict { Fail, Pass, Skipped }
+
+    /// <summary>One leaf the rig skipped, and why.</summary>
+    public readonly record struct SkipNote(string Expr, string Reason)
+    {
+        public override string ToString() => Expr + " — SKIPPED: " + Reason;
+    }
+
+    /// <summary>
+    /// Why <c>server_metric(...)</c> is skipped rather than evaluated (qfg-goi1.1.5). It used to be
+    /// stubbed to 0, which made every <c>server_metric(...) == 0</c> expectation pass without
+    /// checking anything.
+    /// </summary>
+    public const string ServerMetricSkipReason =
+        "server-side metric; api-delivery exports metrics via OTLP push only, no scrape endpoint in the rig; "
+        + "server lag is covered by the staging drill qfg-47c2.19 and the QuonfigSubscriberLagHigh alert";
+
     public readonly struct Result
     {
-        public Result(bool passed, string reason) { Passed = passed; Reason = reason; }
-        public bool Passed { get; }
+        private static readonly IReadOnlyList<SkipNote> NoSkips = Array.Empty<SkipNote>();
+
+        public Result(bool passed, string reason)
+            : this(passed ? Verdict.Pass : Verdict.Fail, reason, null) { }
+
+        public Result(Verdict outcome, string reason, IReadOnlyList<SkipNote>? skippedLeaves)
+        {
+            Outcome = outcome;
+            Reason = reason;
+            SkippedLeaves = skippedLeaves ?? NoSkips;
+        }
+
+        public Verdict Outcome { get; }
+
+        /// <summary>True only for <see cref="Verdict.Pass"/>; a skipped expression is not a pass.</summary>
+        public bool Passed => Outcome == Verdict.Pass;
+
         public string Reason { get; }
+
+        /// <summary>
+        /// Every skipped leaf seen while evaluating, also on a PASS of a compound expression, so
+        /// the report shows which leaves were not checked.
+        /// </summary>
+        public IReadOnlyList<SkipNote> SkippedLeaves { get; }
     }
 
     private static readonly Regex ReConnState =
@@ -50,24 +94,42 @@ internal sealed class ExpressionEvaluator
 
         if (e.Contains(" OR ", StringComparison.Ordinal))
         {
-            var parts = SplitOutsideQuotesAndRegex(e, " OR ");
             var reasons = new List<string>();
-            foreach (var p in parts)
+            var skipped = new List<SkipNote>();
+            var anyFail = false;
+            foreach (var p in SplitOutsideQuotesAndRegex(e, " OR "))
             {
                 var r = Evaluate(p);
-                if (r.Passed) return new Result(true, string.Empty);
-                reasons.Add(r.Reason);
+                skipped.AddRange(r.SkippedLeaves);
+                if (r.Outcome == Verdict.Pass) return new Result(Verdict.Pass, string.Empty, skipped);
+                if (r.Outcome == Verdict.Fail)
+                {
+                    anyFail = true;
+                    reasons.Add(r.Reason);
+                }
             }
-            return new Result(false, "OR: " + string.Join(" | ", reasons));
+            // No leaf passed. A skipped leaf cannot satisfy the OR: fail if any leaf failed, and
+            // report SKIPPED only when every leaf was skipped.
+            return anyFail
+                ? new Result(Verdict.Fail, "OR: " + string.Join(" | ", reasons), skipped)
+                : new Result(Verdict.Skipped, SkippedReason(skipped), skipped);
         }
         if (e.Contains(" AND ", StringComparison.Ordinal))
         {
+            var skipped = new List<SkipNote>();
+            var anyPass = false;
             foreach (var p in SplitOutsideQuotesAndRegex(e, " AND "))
             {
                 var r = Evaluate(p);
-                if (!r.Passed) return new Result(false, "AND: " + r.Reason);
+                skipped.AddRange(r.SkippedLeaves);
+                if (r.Outcome == Verdict.Fail) return new Result(Verdict.Fail, "AND: " + r.Reason, skipped);
+                if (r.Outcome == Verdict.Pass) anyPass = true;
             }
-            return new Result(true, string.Empty);
+            // A skipped leaf is neutral: the AND passes on its evaluated leaves, and is SKIPPED
+            // only when every leaf was skipped.
+            return anyPass
+                ? new Result(Verdict.Pass, string.Empty, skipped)
+                : new Result(Verdict.Skipped, SkippedReason(skipped), skipped);
         }
         return Leaf(e);
     }
@@ -115,14 +177,11 @@ internal sealed class ExpressionEvaluator
             var ok = CompareDouble(op, got, want);
             return new Result(ok, "sdkMetric(" + metric + ",layer=" + (layer ?? "*") + ")=" + got + " " + op + " " + want);
         }
-        if ((m = ReServerMetric.Match(expr)).Success)
+        if (ReServerMetric.IsMatch(expr))
         {
-            // Server-side metrics aren't exposed to the SDK — stub to 0 (matches sdk-java).
-            double got = 0;
-            var want = double.Parse(m.Groups[3].Value, CultureInfo.InvariantCulture);
-            var op = m.Groups[2].Value;
-            var ok = CompareDouble(op, got, want);
-            return new Result(ok, "server_metric(" + m.Groups[1].Value + ")=0 " + op + " " + want);
+            // Not observable from the SDK rig: skip explicitly, never compare against a stubbed 0.
+            var note = new SkipNote(expr, ServerMetricSkipReason);
+            return new Result(Verdict.Skipped, SkippedReason(new[] { note }), new[] { note });
         }
         if ((m = ReSdkLog.Match(expr)).Success)
         {
@@ -136,6 +195,9 @@ internal sealed class ExpressionEvaluator
         }
         return new Result(false, "unrecognized expression: " + expr);
     }
+
+    private static string SkippedReason(IEnumerable<SkipNote> notes) =>
+        string.Join(" | ", System.Linq.Enumerable.Select(notes, n => n.ToString()));
 
     private static bool CompareLong(string op, long a, long b) => op switch
     {

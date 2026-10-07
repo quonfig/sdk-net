@@ -137,6 +137,92 @@ public class ExpressionEvaluatorTests
         Assert.Contains("unrecognized expression", r.Reason);
     }
 
+    private const string LagExpr = "server_metric('quonfig_subscriber_lag_seconds') == 0";
+
+    [Fact]
+    public void ServerMetric_IsSkippedWithReason_NotSilentZero()
+    {
+        // server_metric(...) used to be stubbed to 0, so "== 0" passed without checking anything.
+        // The rig cannot read api-delivery's metrics, so the leaf must be SKIPPED with the reason
+        // (qfg-goi1.1.5), never PASS.
+        var ev = new ExpressionEvaluator(new ChaosProbe());
+        foreach (var expr in new[] { LagExpr, "server_metric('quonfig_subscriber_lag_seconds') > 60" })
+        {
+            var r = ev.Evaluate(expr);
+            Assert.Equal(ExpressionEvaluator.Verdict.Skipped, r.Outcome);
+            Assert.False(r.Passed, expr);
+            Assert.Contains("SKIPPED", r.Reason, System.StringComparison.Ordinal);
+            Assert.Contains("OTLP", r.Reason, System.StringComparison.Ordinal);
+            Assert.Contains("qfg-47c2.19", r.Reason, System.StringComparison.Ordinal);
+            Assert.Contains("QuonfigSubscriberLagHigh", r.Reason, System.StringComparison.Ordinal);
+            var note = Assert.Single(r.SkippedLeaves);
+            Assert.Equal(expr, note.Expr);
+            Assert.Equal(ExpressionEvaluator.ServerMetricSkipReason, note.Reason);
+        }
+    }
+
+    [Fact]
+    public void SkippedLeaf_IsNeutralInAnd_OtherLeavesStillEnforced()
+    {
+        // Scenario 02: "client.connectionState() == 'connected' AND server_metric(...) == 0".
+        var probe = new ChaosProbe();
+        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var ev = new ExpressionEvaluator(probe);
+
+        var pass = ev.Evaluate("client.connectionState() == 'connected' AND " + LagExpr);
+        Assert.Equal(ExpressionEvaluator.Verdict.Pass, pass.Outcome);
+        Assert.Single(pass.SkippedLeaves);
+
+        var fail = ev.Evaluate("client.connectionState() == 'disconnected' AND " + LagExpr);
+        Assert.Equal(ExpressionEvaluator.Verdict.Fail, fail.Outcome);
+
+        var allSkipped = ev.Evaluate(LagExpr + " AND " + LagExpr);
+        Assert.Equal(ExpressionEvaluator.Verdict.Skipped, allSkipped.Outcome);
+    }
+
+    [Fact]
+    public void SkippedLeaf_IsNeutralInOr_DoesNotSatisfyIt()
+    {
+        var probe = new ChaosProbe();
+        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var ev = new ExpressionEvaluator(probe);
+
+        Assert.Equal(ExpressionEvaluator.Verdict.Fail,
+            ev.Evaluate("client.connectionState() == 'disconnected' OR " + LagExpr).Outcome);
+        Assert.Equal(ExpressionEvaluator.Verdict.Pass,
+            ev.Evaluate(LagExpr + " OR client.connectionState() == 'connected'").Outcome);
+        Assert.Equal(ExpressionEvaluator.Verdict.Skipped,
+            ev.Evaluate(LagExpr + " OR " + LagExpr).Outcome);
+    }
+
+    [Fact]
+    public void SkipLog_AppendsOneLinePerSkippedLeaf()
+    {
+        var path = System.IO.Path.GetTempFileName();
+        try
+        {
+            var log = new ChaosSkipLog(path);
+            var note = new ExpressionEvaluator.SkipNote(LagExpr, ExpressionEvaluator.ServerMetricSkipReason);
+            log.Record("01-baseline", 3, note);
+            log.Record("02-silent-stall", 0, note);
+            var lines = System.IO.File.ReadAllLines(path);
+            Assert.Equal(2, lines.Length);
+            Assert.Equal("01-baseline\texp[3]\t" + LagExpr + "\t" + ExpressionEvaluator.ServerMetricSkipReason, lines[0]);
+            Assert.StartsWith("02-silent-stall\texp[0]\t", lines[1], System.StringComparison.Ordinal);
+        }
+        finally
+        {
+            System.IO.File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void SkipLog_WithoutPath_IsANoOp()
+    {
+        var log = new ChaosSkipLog(null);
+        log.Record("01-baseline", 0, new ExpressionEvaluator.SkipNote(LagExpr, "r"));
+    }
+
     [Fact]
     public void Unused_RegexImportIsKept() => Assert.IsType<Regex>(new Regex("x"));
 }
