@@ -354,4 +354,54 @@ public sealed class FallbackPollerTests
             await s.StopAsync();
         }
     }
+    // qfg-goi1.2.15 item 1 — the idle wait is signaled, not a busy poll. While SSE
+    // is connected the worker waits up to 1h; it used to do that by looping a 5ms
+    // Task.Delay, ~200 timer wakeups per second per client, forever. The wait must
+    // park until SetSseConnected signals an edge (or the deadline / stop token).
+    [Fact]
+    public async Task IdleWaitDoesNotBusyPoll()
+    {
+        var p = new FallbackPoller(
+            interval: TimeSpan.FromSeconds(30),
+            threshold: TimeSpan.FromSeconds(30),
+            fetch: _ => Task.CompletedTask);
+        var s = Supervise(p);
+        try
+        {
+            p.SetSseConnected(true);
+            // Let the worker enter its connected-branch wait, then measure.
+            await WaitForAsync(WaitBudget, () => p.WaitsEntered >= 1,
+                "worker never entered its wait");
+            long before = p.WaitWakeups;
+            await Task.Delay(TimeSpan.FromSeconds(1));
+            long wakeups = p.WaitWakeups - before;
+            wakeups.Should().BeLessThan(5,
+                "an idle connected poller must park on a signal, not wake every 5ms (~200/s)");
+
+            // And the signal still delivers edges promptly (qfg-vov2 semantics).
+            int engaged = 0;
+            var p2 = new FallbackPoller(
+                interval: TimeSpan.FromSeconds(30),
+                threshold: TimeSpan.FromMilliseconds(20),
+                fetch: _ => Task.CompletedTask,
+                onEngage: () => Interlocked.Increment(ref engaged));
+            var s2 = Supervise(p2);
+            try
+            {
+                p2.SetSseConnected(true);
+                await WaitForAsync(WaitBudget, () => p2.WaitsEntered >= 1, "p2 never entered its wait");
+                p2.SetSseConnected(false);
+                await WaitForAsync(WaitBudget, () => Volatile.Read(ref engaged) >= 1,
+                    "disconnect edge was not delivered to a parked 1h wait");
+            }
+            finally
+            {
+                await s2.StopAsync();
+            }
+        }
+        finally
+        {
+            await s.StopAsync();
+        }
+    }
 }

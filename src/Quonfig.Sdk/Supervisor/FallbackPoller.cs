@@ -50,6 +50,20 @@ public sealed class FallbackPoller
     private bool _hasDisconnectStamp;
     private bool _engaged;
 
+    // Completed (and replaced) on every SetSseConnected call, under _lock. A wait
+    // grabs the current task under the lock and parks on it, so an edge wakes the
+    // worker without any polling (qfg-goi1.2.15).
+    private TaskCompletionSource<bool> _edgeSignal = NewEdgeSignal();
+
+    // Test seams (qfg-goi1.2.15): how many waits the worker entered, and how many
+    // times a wait woke up without returning to the decision loop.
+    private long _waitsEntered;
+    private long _waitWakeups;
+
+    internal long WaitsEntered => Interlocked.Read(ref _waitsEntered);
+
+    internal long WaitWakeups => Interlocked.Read(ref _waitWakeups);
+
     /// <summary>Threshold of SSE-down time before engaging.</summary>
     public TimeSpan Threshold => _threshold;
 
@@ -104,9 +118,16 @@ public sealed class FallbackPoller
                 _disconnectedSinceTicks = DateTime.UtcNow.Ticks;
                 _hasDisconnectStamp = true;
             }
-            Monitor.PulseAll(_lock);
+            var signal = _edgeSignal;
+            _edgeSignal = NewEdgeSignal();
+            // RunContinuationsAsynchronously: the waiter resumes on the pool, not
+            // inline on this caller's thread while it holds _lock.
+            signal.TrySetResult(true);
         }
     }
+
+    private static TaskCompletionSource<bool> NewEdgeSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     /// <summary>True while the poller is engaged (i.e. SSE has been down past the threshold).</summary>
     public bool Active
@@ -160,7 +181,7 @@ public sealed class FallbackPoller
                         {
                             action = Action_.None;
                         }
-                        // No deadline while connected — wake on SetSseConnected via PulseAll.
+                        // No deadline while connected — the wait wakes on the SetSseConnected signal.
                         wait = TimeSpan.FromHours(1);
                     }
                     else
@@ -209,10 +230,9 @@ public sealed class FallbackPoller
 
                 if (ctx.IsStopped) return;
 
-                // Wait — woken early by SetSseConnected (Monitor.PulseAll) or by
-                // ctx.StopToken via a registration on the wait. We use
-                // Task.Delay with the stop token so cancellation unblocks us
-                // immediately, then re-check state.
+                // Wait — woken early by a SetSseConnected edge signal or by
+                // ctx.StopToken (the deadline delay is bound to it, so
+                // cancellation unblocks us immediately), then re-check state.
                 try
                 {
                     await DelayWithPulseAsync(wait, connectedAtDecision, ctx.StopToken)
@@ -237,10 +257,11 @@ public sealed class FallbackPoller
     }
 
     /// <summary>
-    /// Waits up to <paramref name="duration"/> for either the deadline or a
-    /// pulse from <see cref="SetSseConnected"/>. We poll on a short tick because
-    /// <see cref="Monitor"/> can't await asynchronously; the tick is bounded by
-    /// the requested duration so callers paying for a long sleep don't busy-loop.
+    /// Waits up to <paramref name="duration"/> for either the deadline or an
+    /// SSE state edge from <see cref="SetSseConnected"/>. The wait parks on the
+    /// edge signal and a single deadline delay; nothing wakes in between
+    /// (qfg-goi1.2.15: it used to poll on a 5 ms tick, ~200 wakeups/s for the
+    /// life of every client).
     /// </summary>
     /// <param name="duration">Maximum time to wait.</param>
     /// <param name="baseline">The <c>_sseConnected</c> value the caller's wait
@@ -251,26 +272,45 @@ public sealed class FallbackPoller
     private async Task DelayWithPulseAsync(TimeSpan duration, bool baseline, CancellationToken stop)
     {
         if (duration <= TimeSpan.Zero) return;
-        // Use a short polling tick so SetSseConnected edges arrive fast in tests
-        // that don't want to wait the full interval. In production the tick is
-        // capped by the requested duration anyway.
-        var tick = duration < TimeSpan.FromMilliseconds(5)
-            ? duration
-            : TimeSpan.FromMilliseconds(5);
-        var deadline = DateTime.UtcNow + duration;
-        // Checked BEFORE the first sleep as well as after every tick: the edge may
-        // already have landed in the caller's post-lock window, in which case there
-        // is nothing left to wait for.
-        bool connectedNow;
-        lock (_lock) { connectedNow = _sseConnected; }
-        if (connectedNow != baseline) return; // edge — re-evaluate.
-        while (DateTime.UtcNow < deadline)
+        // Task.Delay rejects anything past int.MaxValue ms (~24.8 days). Returning
+        // early is harmless: the caller just re-runs its decision.
+        if (duration > MaxDelay) duration = MaxDelay;
+        Interlocked.Increment(ref _waitsEntered);
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(stop);
+        var deadline = Task.Delay(duration, deadlineCts.Token);
+        try
         {
-            await Task.Delay(tick, stop).ConfigureAwait(false);
-            lock (_lock) { connectedNow = _sseConnected; }
-            if (connectedNow != baseline) return; // edge — re-evaluate.
+            while (true)
+            {
+                Task edge;
+                // Checked BEFORE the first park as well as after every signal: the
+                // edge may already have landed in the caller's post-lock window, in
+                // which case there is nothing left to wait for.
+                lock (_lock)
+                {
+                    if (_sseConnected != baseline) return; // edge — re-evaluate.
+                    edge = _edgeSignal.Task;
+                }
+                var done = await Task.WhenAny(edge, deadline).ConfigureAwait(false);
+                if (done == deadline)
+                {
+                    // Throws OperationCanceledException if the stop token fired.
+                    await deadline.ConfigureAwait(false);
+                    return;
+                }
+                // Signaled, but possibly with the same state (a repeated
+                // SetSseConnected(true)); loop and re-check against the baseline.
+                Interlocked.Increment(ref _waitWakeups);
+            }
+        }
+        finally
+        {
+            // Release the pending deadline timer when we return on an edge.
+            deadlineCts.Cancel();
         }
     }
+
+    private static readonly TimeSpan MaxDelay = TimeSpan.FromMilliseconds(int.MaxValue - 1);
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Design", "CA1031:Do not catch general exception types",
