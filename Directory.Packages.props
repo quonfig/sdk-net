@@ -7,11 +7,11 @@
 
   <ItemGroup Label="Runtime">
     <!-- System.Text.Json is in-box on net8.0; for netstandard2.0 the PackageReference brings the implementation. -->
-    <PackageVersion Include="System.Text.Json" Version="8.0.5" />
+    <PackageVersion Include="System.Text.Json" Version="8.0.6" />
     <PackageVersion Include="System.Threading.Channels" Version="8.0.0" />
     <!-- ImmutableDictionary backs ConfigStore. In-box on net8.0; PackageReference brings it to NS2.0. -->
     <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
     <!-- Microsoft.Extensions.Logging brings ILoggingBuilder + the default ILoggerFactory
          impl. Required by Quonfig.Sdk.Extensions.Logging for the builder-extension surface. -->
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="8.0.1" />
@@ -20,31 +20,31 @@
     <PackageVersion Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Options" Version="8.0.2" />
     <!-- Serilog companion: minimum-supported Serilog floor. -->
-    <PackageVersion Include="Serilog" Version="4.1.0" />
-    <PackageVersion Include="Serilog.Sinks.TestCorrelator" Version="4.0.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.10" />
+    <PackageVersion Include="Serilog" Version="4.4.0" />
+    <PackageVersion Include="Serilog.Sinks.TestCorrelator" Version="4.0.2" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.31" />
     <!--
       BouncyCastle.Cryptography — netstandard2.0 polyfill for AES-GCM (System.Security.Cryptography.AesGcm
       only exists on net8.0+). Plan project/plans/sdk-net.md ("Dependencies") pre-approves BouncyCastle as
       the cross-platform option vs Cng (Windows-only). Referenced only from the netstandard2.0 build via
       conditional ItemGroup in Quonfig.Sdk.csproj; net8.0 consumers don't transitively pick it up.
     -->
-    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.4.0" />
+    <PackageVersion Include="BouncyCastle.Cryptography" Version="2.7.0" />
   </ItemGroup>
 
   <ItemGroup Label="Test">
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
-    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageVersion Include="FluentAssertions" Version="6.12.2" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="WireMock.Net" Version="1.6.7" />
     <!-- YamlDotNet — chaos scenarios live as YAML under ../integration-test-data/chaos/scenarios/.
          Used only from Quonfig.Sdk.Chaos.Tests; the SDK proper has no YAML dependency. -->
-    <PackageVersion Include="YamlDotNet" Version="16.2.1" />
+    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
     <!-- Xunit.SkippableFact — chaos tests must skip cleanly when QUONFIG_CHAOS_RUN!=1 so the
          default `dotnet test` reports skipped (not failed/passed). -->
-    <PackageVersion Include="Xunit.SkippableFact" Version="1.4.13" />
+    <PackageVersion Include="Xunit.SkippableFact" Version="1.5.85" />
   </ItemGroup>
 
 </Project>
