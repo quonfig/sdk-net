@@ -98,7 +98,7 @@ jobs:
 
       - name: Setup .NET 8
         if: env.HAS_REPO_TOKEN == 'true'
-        uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4
         with:
           dotnet-version: 8.0.x
 

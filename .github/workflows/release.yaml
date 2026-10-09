@@ -47,7 +47,7 @@ jobs:
           ref: v2026.10.07
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4
         with:
           dotnet-version: 8.0.x
 
@@ -109,7 +109,7 @@ jobs:
           path: sdk-net
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@3e891b0cb619bf60e2c25674b222b8940e2c1c25  # v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4
         with:
           dotnet-version: 8.0.x
 
