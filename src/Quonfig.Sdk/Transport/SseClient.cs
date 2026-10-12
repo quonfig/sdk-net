@@ -44,6 +44,14 @@ public sealed class SseClient : IDisposable
     /// <summary>Default Layer 1 read watchdog (90s = 3x the api-delivery 30s comment heartbeat).</summary>
     public static readonly TimeSpan DefaultReadTimeout = TimeSpan.FromSeconds(90);
 
+    /// <summary>
+    /// Fixed bound on the wait for SSE response headers (90s). Deliberately NOT derived from
+    /// <see cref="ReadTimeout"/>: api-delivery sends headers together with the first event, which
+    /// on a cold workspace is the 30s heartbeat, and the chaos harness compresses the read
+    /// timeout to 5s — tying the two made every connect time out under 5s latency (qfg-d1o9).
+    /// </summary>
+    internal static readonly TimeSpan DefaultHeaderTimeout = TimeSpan.FromSeconds(90);
+
     /// <summary>Default initial reconnect delay (1s) before exponential backoff kicks in.</summary>
     public static readonly TimeSpan DefaultInitialBackoff = TimeSpan.FromSeconds(1);
 
@@ -85,6 +93,15 @@ public sealed class SseClient : IDisposable
     /// (escape hatch for offline / proxy debugging).
     /// </summary>
     public TimeSpan ReadTimeout => _readTimeout;
+
+    /// <summary>
+    /// Bound on the wait for response headers on each connect attempt. A peer that accepts the
+    /// TCP connection but never answers would otherwise wedge streaming forever, since the
+    /// <see cref="ReadTimeout"/> watchdog only arms once headers arrive. Defaults to
+    /// <see cref="DefaultHeaderTimeout"/>; settable for tests only. <see cref="TimeSpan.Zero"/>
+    /// disables it.
+    /// </summary>
+    internal TimeSpan HeaderTimeout { get; set; } = DefaultHeaderTimeout;
 
     /// <summary>
     /// Initializes a new SSE client. Lifecycle is driven by <see cref="RunAsync"/>; the
@@ -247,16 +264,31 @@ public sealed class SseClient : IDisposable
         request.Headers.TryAddWithoutValidation("Cache-Control", "no-cache");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
 
+        // Bound the header wait with its own fixed timeout (NOT the read watchdog, which only
+        // arms once headers arrive). Disarmed as soon as headers land so it never touches the body.
+        var headerTimeout = HeaderTimeout;
+        using var headerCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (headerTimeout > TimeSpan.Zero)
+        {
+            headerCts.CancelAfter(headerTimeout);
+        }
+
         HttpResponseMessage? response = null;
         try
         {
             response = await _httpClient
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, headerCts.Token)
                 .ConfigureAwait(false);
+            headerCts.CancelAfter(Timeout.InfiniteTimeSpan);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             response?.Dispose();
+            return false;
+        }
+        catch (OperationCanceledException ex) when (headerCts.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "SSE: no response headers from {Target} within {HeaderTimeout}; reconnecting", target, headerTimeout);
             return false;
         }
         catch (HttpRequestException ex)
