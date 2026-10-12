@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Docs: the README says that the SDK adds the `qfg login` email as `quonfig-user.email` to every evaluation by default, and how to turn that off (qfg-goi1.2.41).** No code change.
 - **Fixed (patch): an SSE connect to a peer that accepts the connection but never sends response headers no longer wedges streaming forever (qfg-goi1.2.37).** The read watchdog only arms once headers arrive, and the stream request has no `HttpClient.Timeout`, so such a peer (a hung proxy or load balancer) left the client waiting on one connect attempt indefinitely and never reconnected. Each connect now waits at most 90 s for headers, then logs a `Warning` and reconnects with the usual backoff. The 90 s bound is fixed and separate from `SseReadTimeout` on purpose: api-delivery sends headers with the first event, which on a cold workspace is the 30 s heartbeat, so a header wait tied to a short read timeout would reconnect forever (as sdk-go and sdk-java found under the chaos latency scenario). Same fix as sdk-go and sdk-java.
 
 ## 1.6.0 - 2026-10-09

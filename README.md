@@ -89,6 +89,12 @@ one full context per hour, **with its values**) and failover counters. Opt out w
 example contexts, no values) or `ContextUploadMode.None` (no context data). With both off, no
 reporter runs. `ContextUploadMode` defaults to `PeriodicExample` since 1.3.0 (was `ShapesOnly`).
 
+**Developer context (on by default).** On a machine where someone ran `qfg login`, the SDK reads the
+signed-in email from `~/.quonfig/tokens.json` and adds it to every evaluation as
+`quonfig-user.email`, so it is sent with context shapes and example contexts. Without that file
+(for example on a server) nothing is added. To turn it off, set `EnableQuonfigUserContext = false`
+or `QUONFIG_DEV_CONTEXT=false`.
+
 **How it is sent.**
 
 - One POST every `TelemetryFlushInterval` (60s), with at most one POST in flight. A tick that fires
