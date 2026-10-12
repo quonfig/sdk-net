@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed (patch): an SSE connect to a peer that accepts the connection but never sends response headers no longer wedges streaming forever (qfg-goi1.2.37).** The read watchdog only arms once headers arrive, and the stream request has no `HttpClient.Timeout`, so such a peer (a hung proxy or load balancer) left the client waiting on one connect attempt indefinitely and never reconnected. Each connect now waits at most 90 s for headers, then logs a `Warning` and reconnects with the usual backoff. The 90 s bound is fixed and separate from `SseReadTimeout` on purpose: api-delivery sends headers with the first event, which on a cold workspace is the 30 s heartbeat, so a header wait tied to a short read timeout would reconnect forever (as sdk-go and sdk-java found under the chaos latency scenario). Same fix as sdk-go and sdk-java.
+
 ## 1.6.0 - 2026-10-09
 
 - **Fixed: evaluation-summary telemetry grew one counter per evaluation for a `json` config whose value comes from an `ENV_VAR` (qfg-goi1.2.2).** The SDK re-parses that value into a new dictionary on every evaluation, and counters were grouped by object reference, so a window of 200k `GetJson` calls kept about 135 MB and sent a 26 MB telemetry POST. Counters now group JSON objects, arrays and string lists by their canonical JSON text (object keys sorted), so equal values share one counter. `TelemetryMaxEvaluationSummaries` (10,000) now caps the distinct counters per window, as in sdk-go, instead of only the distinct config keys; a new counter past the cap is not recorded, and counters already recorded keep counting.
