@@ -121,6 +121,18 @@ public sealed class GetTests
         Assert.Equal("hello.world", actual);
     }
 
+    [Fact(DisplayName = "decrypts a secret whose key config has an environment rule")]
+    public async Task DecryptsASecretWhoseKeyConfigHasAnEnvironmentRule()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("env.scoped.secret");
+        Assert.Equal("hello.world", actual);
+    }
+
     [Fact(DisplayName = "duration 200 ms")]
     public async Task Duration200Ms()
     {

@@ -4,6 +4,8 @@
 // Source: integration-test-data/generators/src/targets/dotnet.ts
 
 using System;
+using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -409,5 +411,70 @@ public sealed class TelemetryTests
             telemetry.Evaluate(scoped, "a.secret.config");
         }
         Assert.Equal(TestSetup.List(TestSetup.Map("key", "a.secret.config", "type", "CONFIG", "value", "hello.world", "value_type", "string", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("string", "*****936c9"), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
+    }
+
+    [Fact(DisplayName = "confidential weighted variant is redacted in selectedValue")]
+    public async Task ConfidentialWeightedVariantIsRedactedInSelectedvalue()
+    {
+        var telemetry = new TestSetup.TelemetryCapture();
+        await using (var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            TelemetrySender = telemetry.Sender,
+        }))
+        {
+            var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+            telemetry.Evaluate(scoped, "confidential.weighted.variant");
+        }
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "confidential.weighted.variant", "type", "CONFIG", "value", "weighted-secret-variant", "value_type", "string", "count", 1L, "reason", 3L, "selected_value", TestSetup.Map("string", "*****364b0"), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L, "weighted_value_index", 0L))), telemetry.Sent("evaluation_summary"));
+    }
+
+    [Fact(DisplayName = "confidential ENV_VAR-provided value is redacted in selectedValue")]
+    public async Task ConfidentialEnvVarProvidedValueIsRedactedInSelectedvalue()
+    {
+        var telemetry = new TestSetup.TelemetryCapture();
+        await using (var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            TelemetrySender = telemetry.Sender,
+        }))
+        {
+            var scoped = client.WithContext(new ContextSet());
+            telemetry.Evaluate(scoped, "confidential.provided.a.number");
+        }
+        var posted = Assert.IsType<List<object?>>(telemetry.Sent("evaluation_summary"));
+        var redactedKeys = new HashSet<string> { "confidential.provided.a.number" };
+        foreach (var o in posted)
+        {
+            if (o is not IDictionary<string, object?> row || row["key"] is not string rowKey) continue;
+            if (!redactedKeys.Contains(rowKey)) continue;
+            row.TryGetValue("selected_value", out var sv);
+            Assert.True(
+                sv is IDictionary<string, object?> svm && svm.Count == 1
+                    && svm.TryGetValue("string", out var svs) && svs is string svStr
+                    && Regex.IsMatch(svStr, "^\\*{5}[0-9a-f]{5}$"),
+                $"{rowKey}: selectedValue {(sv is IDictionary<string, object?> d ? string.Join(", ", d) : sv)} is not redacted");
+            row["selected_value"] = TestSetup.Map("redacted", true);
+        }
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "confidential.provided.a.number", "type", "CONFIG", "value", "1234", "value_type", "string", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("redacted", true), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), posted);
+    }
+
+    [Fact(DisplayName = "non-confidential ENV_VAR-provided value is reported as its resolved value")]
+    public async Task NonConfidentialEnvVarProvidedValueIsReportedAsItsResolvedValue()
+    {
+        var telemetry = new TestSetup.TelemetryCapture();
+        await using (var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            TelemetrySender = telemetry.Sender,
+        }))
+        {
+            var scoped = client.WithContext(new ContextSet());
+            telemetry.Evaluate(scoped, "provided.a.number");
+        }
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "provided.a.number", "type", "CONFIG", "value", 1234L, "value_type", "int", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("int", 1234L), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
     }
 }
