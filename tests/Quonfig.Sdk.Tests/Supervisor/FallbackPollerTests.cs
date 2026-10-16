@@ -177,6 +177,42 @@ public sealed class FallbackPollerTests
         }
     }
 
+    // qfg-goi1.10.41 — a connect immediately followed by a disconnect (an SSE connection that
+    // delivers one keepalive and closes) restarts the threshold from the NEW disconnect, even
+    // though the worker wakes after both edges and sees the same "disconnected" state it
+    // decided against. Before, the worker kept waiting on the original deadline and engaged
+    // at the first disconnect's threshold.
+    [Fact]
+    public async Task ConnectThenDisconnectBackToBackRestartsTheThreshold()
+    {
+        var threshold = TimeSpan.FromSeconds(1);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long engagedAtMs = -1;
+        var p = new FallbackPoller(
+            interval: TimeSpan.FromSeconds(30),
+            threshold: threshold,
+            fetch: _ => Task.CompletedTask,
+            onEngage: () => Interlocked.CompareExchange(ref engagedAtMs, clock.ElapsedMilliseconds, -1));
+        var s = Supervise(p);
+        try
+        {
+            p.SetSseConnected(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            long flapAtMs = clock.ElapsedMilliseconds;
+            p.SetSseConnected(true);
+            p.SetSseConnected(false);
+
+            await WaitForAsync(WaitBudget, () => Interlocked.Read(ref engagedAtMs) >= 0, "poller never engaged");
+            long engaged = Interlocked.Read(ref engagedAtMs);
+            engaged.Should().BeGreaterThanOrEqualTo(flapAtMs + (long)threshold.TotalMilliseconds - 50,
+                "the threshold runs from the latest disconnect (flap at {0}ms), not the first", flapAtMs);
+        }
+        finally
+        {
+            await s.StopAsync();
+        }
+    }
+
     // Test 4 — Reconnect after engagement disengages and stops fetches.
     [Fact]
     public async Task ReconnectAfterEngagementDisengages()

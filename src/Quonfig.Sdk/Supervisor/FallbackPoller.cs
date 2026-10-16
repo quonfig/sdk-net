@@ -72,6 +72,12 @@ public sealed class FallbackPoller
     // worker without any polling (qfg-goi1.2.15).
     private TaskCompletionSource<bool> _edgeSignal = NewEdgeSignal();
 
+    // Count of disconnected -> connected transitions (guarded by _lock). A connect that is
+    // followed at once by a disconnect (an SSE connection that delivers one keepalive and
+    // closes) leaves _sseConnected unchanged by the time the worker wakes, but it DID restart
+    // the threshold; the wait compares this counter too so it re-evaluates (qfg-goi1.10.41).
+    private long _connectTransitions;
+
     // Test seams (qfg-goi1.2.15): how many waits the worker entered, and how many
     // times a wait woke up without returning to the decision loop.
     private long _waitsEntered;
@@ -153,6 +159,7 @@ public sealed class FallbackPoller
     {
         lock (_lock)
         {
+            if (connected && !_sseConnected) _connectTransitions++;
             _sseConnected = connected;
             if (connected)
             {
@@ -249,10 +256,12 @@ public sealed class FallbackPoller
                 // (qfg-vov2). Re-reading swallowed it and slept the full duration —
                 // one hour on the connected branch.
                 bool connectedAtDecision;
+                long connectsAtDecision;
                 string? waitKind;
                 lock (_lock)
                 {
                     connectedAtDecision = _sseConnected;
+                    connectsAtDecision = _connectTransitions;
                     if (connectedAtDecision)
                     {
                         if (engagedLocal)
@@ -334,7 +343,7 @@ public sealed class FallbackPoller
                 // cancellation unblocks us immediately), then re-check state.
                 try
                 {
-                    bool elapsed = await DelayWithPulseAsync(Hooked(waitKind, wait), connectedAtDecision, ctx.StopToken)
+                    bool elapsed = await DelayWithPulseAsync(Hooked(waitKind, wait), connectedAtDecision, connectsAtDecision, ctx.StopToken)
                         .ConfigureAwait(false);
                     thresholdElapsed = elapsed && waitKind == "engage";
                 }
@@ -440,10 +449,13 @@ public sealed class FallbackPoller
     /// decision was made against. Passed in rather than re-read here so a state
     /// change that lands between the caller's lock release and this wait is still
     /// seen as an edge (qfg-vov2).</param>
+    /// <param name="baselineConnects">The <c>_connectTransitions</c> count at the same decision:
+    /// a connect that was undone by a disconnect before this wait re-checked still ends it, so
+    /// the threshold restarts from the latest disconnect (qfg-goi1.10.41).</param>
     /// <param name="stop">Stop token; cancellation unblocks the wait.</param>
     /// <returns><c>true</c> when the wait ran to its deadline, <c>false</c> when an SSE edge
     /// ended it early.</returns>
-    private async Task<bool> DelayWithPulseAsync(TimeSpan duration, bool baseline, CancellationToken stop)
+    private async Task<bool> DelayWithPulseAsync(TimeSpan duration, bool baseline, long baselineConnects, CancellationToken stop)
     {
         if (duration <= TimeSpan.Zero) return true;
         // Task.Delay rejects anything past int.MaxValue ms (~24.8 days). Returning
@@ -462,7 +474,8 @@ public sealed class FallbackPoller
                 // which case there is nothing left to wait for.
                 lock (_lock)
                 {
-                    if (_sseConnected != baseline) return false; // edge — re-evaluate.
+                    // edge — re-evaluate.
+                    if (_sseConnected != baseline || _connectTransitions != baselineConnects) return false;
                     edge = _edgeSignal.Task;
                 }
                 var done = await Task.WhenAny(edge, deadline).ConfigureAwait(false);
