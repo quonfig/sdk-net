@@ -1096,8 +1096,8 @@ public sealed class EnabledTests
         Assert.False(actual);
     }
 
-    [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL rule when the given prop is not a valid semver")]
-    public async Task ReturnsFalseForPropSemverEqualRuleWhenTheGivenPropIsNotAValidSemver()
+    [Fact(DisplayName = "returns true for PROP_SEMVER_EQUAL rule when the given prop is an abbreviated major.minor version")]
+    public async Task ReturnsTrueForPropSemverEqualRuleWhenTheGivenPropIsAnAbbreviatedMajorMinorVersion()
     {
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
@@ -1106,7 +1106,7 @@ public sealed class EnabledTests
         });
         var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0" } });
         var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
-        Assert.False(actual);
+        Assert.True(actual);
     }
 
     [Fact(DisplayName = "returns true for PROP_SEMVER_LESS_THAN rule when the given prop is less than 2.0.0")]
@@ -1184,6 +1184,435 @@ public sealed class EnabledTests
         });
         var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "0.0.5" } });
         var actual = scoped.IsFeatureEnabled("feature-flag.semver-greater-than");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_IS_ONE_OF [\"true\"] when the context value is boolean true")]
+    public async Task ReturnsTrueForPropIsOneOfTrueWhenTheContextValueIsBooleanTrue()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["beta"] = true } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.bool");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_IS_ONE_OF [\"true\"] when the context value is boolean false")]
+    public async Task ReturnsFalseForPropIsOneOfTrueWhenTheContextValueIsBooleanFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["beta"] = false } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.bool");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_IS_ONE_OF [\"true\"] when the context value is the string \"true\"")]
+    public async Task ReturnsTrueForPropIsOneOfTrueWhenTheContextValueIsTheStringTrue()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["beta"] = "true" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.bool");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_IS_NOT_ONE_OF [\"true\"] when the context value is boolean true")]
+    public async Task ReturnsFalseForPropIsNotOneOfTrueWhenTheContextValueIsBooleanTrue()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["beta"] = true } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-not-one-of.bool");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_IS_ONE_OF number strings when the context value is the integer 1")]
+    public async Task ReturnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger1()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(1L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.number");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_IS_ONE_OF number strings when the context value is the number 1.5")]
+    public async Task ReturnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheNumber15()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueDouble(1.5d) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.number");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_IS_ONE_OF number strings when the context value is the integer 1234567")]
+    public async Task ReturnsTrueForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger1234567()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(1234567L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.number");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_IS_ONE_OF number strings when the context value is the integer 2")]
+    public async Task ReturnsFalseForPropIsOneOfNumberStringsWhenTheContextValueIsTheInteger2()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(2L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.is-one-of.number");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_ENDS_WITH_ONE_OF [\"3\"] when the context value is the integer 123")]
+    public async Task ReturnsTrueForPropEndsWithOneOf3WhenTheContextValueIsTheInteger123()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(123L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.ends-with-one-of.number");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_ENDS_WITH_ONE_OF [\"3\"] when the context value is the integer 124")]
+    public async Task ReturnsFalseForPropEndsWithOneOf3WhenTheContextValueIsTheInteger124()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(124L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.ends-with-one-of.number");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for IN_INT_RANGE [0, 10) when the context value is the start bound 0")]
+    public async Task ReturnsTrueForInIntRange010WhenTheContextValueIsTheStartBound0()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(0L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for IN_INT_RANGE [0, 10) when the context value is 9")]
+    public async Task ReturnsTrueForInIntRange010WhenTheContextValueIs9()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(9L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for IN_INT_RANGE [0, 10) when the context value is the end bound 10")]
+    public async Task ReturnsFalseForInIntRange010WhenTheContextValueIsTheEndBound10()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(10L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for IN_INT_RANGE [0, 10) when the context value is -1")]
+    public async Task ReturnsFalseForInIntRange010WhenTheContextValueIs1()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(-1L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for IN_INT_RANGE with no end when the context value is 5000000000")]
+    public async Task ReturnsTrueForInIntRangeWithNoEndWhenTheContextValueIs5000000000()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(5000000000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range.open-end");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for IN_INT_RANGE with no start when the context value is -5")]
+    public async Task ReturnsTrueForInIntRangeWithNoStartWhenTheContextValueIs5()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["n"] = new ContextValueLong(-5L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-int-range.open-start");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")]
+    public async Task ReturnsFalseForPropSemverEqual200WhenTheGivenPropIsThePrerelease200Beta1()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0-beta.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_SEMVER_LESS_THAN 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")]
+    public async Task ReturnsTrueForPropSemverLessThan200WhenTheGivenPropIsThePrerelease200Beta1()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0-beta.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-less-than");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_SEMVER_GREATER_THAN 2.0.0 when the given prop is the prerelease 2.0.0-beta.1")]
+    public async Task ReturnsFalseForPropSemverGreaterThan200WhenTheGivenPropIsThePrerelease200Beta1()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0-beta.1" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-greater-than");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_SEMVER_EQUAL 2.0.0 when the given prop differs only by build metadata")]
+    public async Task ReturnsTrueForPropSemverEqual200WhenTheGivenPropDiffersOnlyByBuildMetadata()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0+build.5" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_SEMVER_LESS_THAN 2.0.0-beta when the given prop is the prerelease 2.0.0-alpha")]
+    public async Task ReturnsTrueForPropSemverLessThan200BetaWhenTheGivenPropIsThePrerelease200Alpha()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2.0.0-alpha" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-less-than.prerelease");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_SEMVER_EQUAL 2.0.0 when the given prop is the abbreviated major version 2")]
+    public async Task ReturnsTrueForPropSemverEqual200WhenTheGivenPropIsTheAbbreviatedMajorVersion2()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "2" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_SEMVER_EQUAL 2.0.0 when the given prop has a v prefix")]
+    public async Task ReturnsFalseForPropSemverEqual200WhenTheGivenPropHasAVPrefix()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["app"] = new ContextProperties { ["version"] = "v2.0.0" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.semver-equal");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_BEFORE when the given prop is a date-only string")]
+    public async Task ReturnsFalseForPropBeforeWhenTheGivenPropIsADateOnlyString()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2024-11-01" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_BEFORE when the given prop is an RFC3339 string without an offset")]
+    public async Task ReturnsFalseForPropBeforeWhenTheGivenPropIsAnRfc3339StringWithoutAnOffset()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2024-11-01T00:00:00" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_BEFORE when the given prop is a free-form date string")]
+    public async Task ReturnsFalseForPropBeforeWhenTheGivenPropIsAFreeFormDateString()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "Nov 1 2024" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_BEFORE when the given prop is an RFC3339 string with a numeric offset")]
+    public async Task ReturnsTrueForPropBeforeWhenTheGivenPropIsAnRfc3339StringWithANumericOffset()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2024-11-01T02:00:00+02:00" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_BEFORE when the given prop is an all-digit epoch-ms string")]
+    public async Task ReturnsTrueForPropBeforeWhenTheGivenPropIsAnAllDigitEpochMsString()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "1730419200000" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_BEFORE an RFC3339 criterion when the given prop is an earlier epoch-ms number")]
+    public async Task ReturnsTrueForPropBeforeAnRfc3339CriterionWhenTheGivenPropIsAnEarlierEpochMsNumber()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1730419200000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before.rfc3339-criterion");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_BEFORE an RFC3339 criterion when the given prop is a later RFC3339 string")]
+    public async Task ReturnsFalseForPropBeforeAnRfc3339CriterionWhenTheGivenPropIsALaterRfc3339String()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = "2025-01-01T00:00:00Z" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.before.rfc3339-criterion");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_AFTER an all-digit criterion \"999\" when the given prop is 500")]
+    public async Task ReturnsFalseForPropAfterAnAllDigitCriterion999WhenTheGivenPropIs500()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(500L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after.numeric-string-criterion");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_AFTER an all-digit criterion \"999\" when the given prop is 1000")]
+    public async Task ReturnsTrueForPropAfterAnAllDigitCriterion999WhenTheGivenPropIs1000()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["creation_date"] = new ContextValueLong(1000L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.after.numeric-string-criterion");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_GREATER_THAN 30 when the given prop is a numeric string above the threshold")]
+    public async Task ReturnsFalseForPropGreaterThan30WhenTheGivenPropIsANumericStringAboveTheThreshold()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["age"] = "35" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
         Assert.False(actual);
     }
 }

@@ -341,4 +341,104 @@ public sealed class OperatorsTests
         Operators.IS_PRESENT.Should().Be("IS_PRESENT");
         Operators.IS_NOT_PRESENT.Should().Be("IS_NOT_PRESENT");
     }
+
+    // ----- qfg-goi1.5 operator semantics (R1 canonical strings, R5 dates, Q5 semver) -----
+    // Runtime-float cases the ITD generators cannot carry (the YAML loader yields longs).
+
+    [Theory]
+    [InlineData(1.0, "1")]
+    [InlineData(1234567.0, "1234567")]
+    [InlineData(5e9, "5000000000")]
+    [InlineData(1e15, "1000000000000000")]
+    [InlineData(-42.0, "-42")]
+    [InlineData(1.5, "1.5")]
+    public void R1_IntegralDoubles_StringifyAsPlainDigits(double ctx, string expected)
+    {
+        Operators.ToStringOrEmpty(ctx).Should().Be(expected);
+        var c = Crit(Operators.PROP_IS_ONE_OF, "user.n", StrList(expected));
+        Operators.EvaluateCriterion(ctx, true, c, null).Should().BeTrue();
+    }
+
+    [Fact]
+    public void R1_IntegralFloatAndDecimal_StringifyAsPlainDigits()
+    {
+        Operators.ToStringOrEmpty(3.0f).Should().Be("3");
+        Operators.ToStringOrEmpty(1234567.0m).Should().Be("1234567");
+        Operators.ToStringOrEmpty(1.50m).Should().Be("1.50");
+    }
+
+    [Fact]
+    public void R1_Bool_StringifiesLowercase()
+    {
+        var oneOf = Crit(Operators.PROP_IS_ONE_OF, "user.beta", StrList("true"));
+        Operators.EvaluateCriterion(true, true, oneOf, null).Should().BeTrue();
+        Operators.EvaluateCriterion(false, true, oneOf, null).Should().BeFalse();
+        var oldWorkaround = Crit(Operators.PROP_IS_ONE_OF, "user.beta", StrList("True"));
+        Operators.EvaluateCriterion(true, true, oldWorkaround, null).Should().BeFalse();
+        Operators.ToStringOrEmpty(false).Should().Be("false");
+    }
+
+    [Theory]
+    [InlineData("2024-11-01T00:00:00Z", 1730419200000L)]
+    [InlineData("2024-11-01T02:00:00+02:00", 1730419200000L)]
+    [InlineData("2024-10-31T19:00:00-05:00", 1730419200000L)]
+    [InlineData("2024-11-01T00:00:00.5Z", 1730419200500L)]
+    [InlineData("2024-11-01T00:00:00.123+00:00", 1730419200123L)]
+    [InlineData("1730419200000", 1730419200000L)]
+    [InlineData("-5", -5L)]
+    public void R5_AcceptedTimestampStrings(string input, long expected)
+    {
+        Operators.TryDateToMillis(input, out var ms).Should().BeTrue(input);
+        ms.Should().Be(expected);
+    }
+
+    [Theory]
+    [InlineData("2024-11-01")]
+    [InlineData("2024-11-01T00:00:00")]
+    [InlineData("2024-11-01T00:00")]
+    [InlineData("Nov 1 2024")]
+    [InlineData("2024-11-01 00:00:00Z")]
+    [InlineData("2024-11-01t00:00:00z")]
+    [InlineData(" 1730419200000")]
+    [InlineData("+1730419200000")]
+    [InlineData("")]
+    public void R5_RejectedTimestampStrings(string input)
+    {
+        Operators.TryDateToMillis(input, out _).Should().BeFalse(input);
+    }
+
+    [Fact]
+    public void R5_CriterionSideIsStrictToo()
+    {
+        var dateOnlyCriterion = Crit(Operators.PROP_BEFORE, "user.created_at", Str("2024-12-01"));
+        Operators.EvaluateCriterion(1730419200000L, true, dateOnlyCriterion, null).Should().BeFalse();
+        var rfcCriterion = Crit(Operators.PROP_BEFORE, "user.created_at", Str("2024-12-01T00:00:00Z"));
+        Operators.EvaluateCriterion(1730419200000L, true, rfcCriterion, null).Should().BeTrue();
+        Operators.EvaluateCriterion(5e9, true, Crit(Operators.PROP_AFTER, "user.created_at", Str("999")), null)
+            .Should().BeTrue("a runtime double is epoch ms");
+    }
+
+    [Theory]
+    [InlineData("2", "2.0.0", true)]
+    [InlineData("2.0", "2.0.0", true)]
+    [InlineData("2.1", "2.1.0", true)]
+    [InlineData("2.0.0", "2", true)]
+    [InlineData("v2.0.0", "2.0.0", false)]
+    [InlineData("2.0-beta", "2.0.0", false)]
+    [InlineData("02", "2.0.0", false)]
+    public void Q5_AbbreviatedSemverEquals(string ctx, string match, bool expected)
+    {
+        var c = Crit(Operators.PROP_SEMVER_EQUAL, "app.version", Str(match));
+        Operators.EvaluateCriterion(ctx, true, c, null).Should().Be(expected);
+    }
+
+    [Fact]
+    public void Q5_AbbreviatedSemverOrders()
+    {
+        var gt = Crit(Operators.PROP_SEMVER_GREATER_THAN, "app.version", Str("4.0.18"));
+        Operators.EvaluateCriterion("4.1", true, gt, null).Should().BeTrue();
+        Operators.EvaluateCriterion("4", true, gt, null).Should().BeFalse();
+        // The public strict parser is unchanged.
+        SemanticVersion.TryParse("4.1", out _).Should().BeFalse();
+    }
 }
