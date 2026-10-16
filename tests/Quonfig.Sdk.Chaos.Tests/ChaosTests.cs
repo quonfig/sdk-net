@@ -152,14 +152,17 @@ public sealed class ChaosTests
             StreamUrls = new[] { sseBase },
             // Datadir mode is N/A here — we want the HTTP+SSE path.
             InitTimeout = TimeSpan.FromSeconds(15),
-            // 5s Layer 1 read watchdog, mirroring sdk-go's chaos rig
-            // (withTestSSEReadTimeout(5s), chaos_test.go). The production 90s default loses
-            // scenario 02's timing race: stall injected at 5s + 90s watchdog = the Disconnected
-            // edge lands at ~95s, exactly on exp[1]'s within_ms=95000 deadline (observed red on
-            // the first CI run). The fixture api-delivery heartbeats every 1s
-            // (SSE_HEARTBEAT_INTERVAL=1s in run-chaos.sh), so 5s never false-fires in the
-            // healthy scenarios (01, 03, 11).
-            SseReadTimeout = TimeSpan.FromSeconds(5),
+            // Shortened Layer 1 read watchdog (production default 90s). 90s loses scenario 02's
+            // timing race: stall injected at 5s + 90s watchdog = the Disconnected edge lands at
+            // ~95s, exactly on exp[1]'s within_ms=95000 deadline (observed red on the first CI
+            // run). The fixture api-delivery heartbeats every 1s (SSE_HEARTBEAT_INTERVAL=1s in
+            // run-chaos.sh). 10s (as sdk-java's rig), not sdk-go's 5s: scenario 03 adds 5000ms
+            // latency to the SSE leg, which opens a ~6s gap between heartbeats once the toxic
+            // lands, and a 5s watchdog fired on it (a false Layer 1 restart, observed once the
+            // qfg-goi1.7 holds made 03 check its whole window). 02 (stall at 5s, restart within
+            // 95s) stays reachable; 07's half-open restart comes from the dropped connection
+            // (~5s), not the watchdog.
+            SseReadTimeout = TimeSpan.FromSeconds(10),
             Logger = logger,
             // Layer 2 engage delay stays at the cross-SDK default (120s) — scenario 05's
             // within_ms=135000 accommodates it.
