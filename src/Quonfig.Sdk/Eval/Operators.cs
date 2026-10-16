@@ -307,8 +307,8 @@ public static class Operators
                         && matchValue is not null
                         && contextValue is string ctxStr
                         && matchValue.Payload is string matchStr
-                        && SemanticVersion.TryParse(ctxStr, out var ctxSv)
-                        && SemanticVersion.TryParse(matchStr, out var matchSv))
+                        && SemanticVersion.TryParseAbbreviated(ctxStr, out var ctxSv)
+                        && SemanticVersion.TryParseAbbreviated(matchStr, out var matchSv))
                     {
                         int cmp = ctxSv!.CompareTo(matchSv);
                         return op switch
@@ -393,15 +393,40 @@ public static class Operators
         return null;
     }
 
-    private static string ToStringOrEmpty(object? v)
+    // 2^53: the largest magnitude at which every integer is exactly representable as a double.
+    private const double MaxExactIntegerDouble = 9007199254740992d;
+
+    /// <summary>
+    /// Canonical string form (qfg-goi1.5 R1), shared by every SDK: strings as-is; a bool is
+    /// <c>"true"</c>/<c>"false"</c> (not the CLR <c>"True"</c>); an integral number is plain base-10
+    /// digits whatever its runtime type (so <c>1.0</c>, <c>1234567.0</c> and <c>5e9</c> as doubles
+    /// read <c>"1"</c>, <c>"1234567"</c>, <c>"5000000000"</c>, never <c>"1E+15"</c> or <c>"1.0"</c>);
+    /// other numbers use the shortest round-trip form.
+    /// </summary>
+    internal static string ToStringOrEmpty(object? v)
     {
         if (v is null) return "";
         if (v is string s) return s;
-        if (v is double d) return d.ToString("R", CultureInfo.InvariantCulture);
-        if (v is float f) return f.ToString("R", CultureInfo.InvariantCulture);
+        if (v is bool b) return b ? "true" : "false";
+        if (v is double d) return DoubleToCanonical(d);
+        if (v is float f) return IsIntegralExact(f) ? ((long)f).ToString(CultureInfo.InvariantCulture) : f.ToString("R", CultureInfo.InvariantCulture);
+        if (v is decimal m)
+        {
+            return decimal.Truncate(m) == m
+                ? decimal.Truncate(m).ToString("0", CultureInfo.InvariantCulture)
+                : m.ToString(CultureInfo.InvariantCulture);
+        }
         if (v is IFormattable formattable) return formattable.ToString(null, CultureInfo.InvariantCulture);
         return v.ToString() ?? "";
     }
+
+    private static string DoubleToCanonical(double d) =>
+        IsIntegralExact(d)
+            ? ((long)d).ToString(CultureInfo.InvariantCulture)
+            : d.ToString("R", CultureInfo.InvariantCulture);
+
+    private static bool IsIntegralExact(double d) =>
+        !double.IsNaN(d) && !double.IsInfinity(d) && Math.Floor(d) == d && Math.Abs(d) < MaxExactIntegerDouble;
 
     private static IList<string> ToStringList(object? v)
     {
@@ -481,33 +506,63 @@ public static class Operators
         }
     }
 
-    private static bool TryDateToMillis(object? val, out long millis)
+    // RFC3339 date-time with a REQUIRED Z or numeric offset (qfg-goi1.5 R5); fractional seconds
+    // optional. Uppercase T and Z, matching cli `qfg verify` (value-grammar.ts RFC3339_PATTERN).
+    private static readonly string[] Rfc3339Formats =
+    {
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss'Z'",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'FFFFFFF'Z'",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'sszzz",
+        "yyyy'-'MM'-'dd'T'HH':'mm':'ss'.'FFFFFFFzzz",
+    };
+
+    /// <summary>
+    /// The one timestamp grammar (qfg-goi1.5 R5), applied to the context value AND the criterion:
+    /// a JSON number (epoch ms, truncated), an all-digit string (epoch ms), or an RFC3339 string
+    /// with <c>Z</c> or a numeric offset. Date-only, offset-less and free-form strings are not
+    /// timestamps, so the criterion fails closed on them.
+    /// </summary>
+    internal static bool TryDateToMillis(object? val, out long millis)
     {
         if (IsNumber(val))
         {
-            if (TryToDouble(val, out var d))
+            if (TryToDouble(val, out var d) && !double.IsNaN(d) && !double.IsInfinity(d))
             {
                 millis = (long)d;
                 return true;
             }
         }
-        if (val is string s)
+        if (val is string s && s.Length > 0)
         {
-            // ISO-8601: prefer DateTimeOffset for round-trip-with-zone parsing.
-            if (DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
+            if (IsDigitString(s))
+            {
+                if (long.TryParse(s, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var l))
+                {
+                    millis = l;
+                    return true;
+                }
+            }
+            else if (DateTimeOffset.TryParseExact(s, Rfc3339Formats, CultureInfo.InvariantCulture,
+                         DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dto))
             {
                 millis = dto.ToUnixTimeMilliseconds();
-                return true;
-            }
-            if (long.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l))
-            {
-                millis = l;
                 return true;
             }
         }
         millis = 0;
         return false;
+    }
+
+    // ^-?[0-9]+$ (ASCII digits only; no whitespace, no '+').
+    private static bool IsDigitString(string s)
+    {
+        int i = s[0] == '-' ? 1 : 0;
+        if (i == s.Length) return false;
+        for (; i < s.Length; i++)
+        {
+            if (s[i] < '0' || s[i] > '9') return false;
+        }
+        return true;
     }
 }
 

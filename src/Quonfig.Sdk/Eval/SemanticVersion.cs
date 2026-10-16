@@ -23,6 +23,13 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
         @"(?:\+(?<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$",
         RegexOptions.Compiled);
 
+    // Q5 (qfg-goi1.5): the rule operators also accept an abbreviated "X" or "X.Y", read as X.0.0 /
+    // X.Y.0. A prerelease or build suffix needs all three parts, and a "v" prefix stays invalid
+    // (matches cli `qfg verify` SEMVER_PATTERN).
+    private static readonly Regex AbbreviatedRegex = new(
+        @"^(?<major>0|[1-9]\d*)(?:\.(?<minor>0|[1-9]\d*))?\z",
+        RegexOptions.Compiled);
+
     /// <summary>Major version component.</summary>
     public int Major { get; }
 
@@ -74,6 +81,27 @@ public sealed class SemanticVersion : IComparable<SemanticVersion>, IEquatable<S
             int.Parse(m.Groups["patch"].Value, CultureInfo.InvariantCulture),
             m.Groups["prerelease"].Success ? m.Groups["prerelease"].Value : "",
             m.Groups["buildmetadata"].Success ? m.Groups["buildmetadata"].Value : "");
+        return true;
+    }
+
+    /// <summary>
+    /// Parses a full SemVer 2.0 version (as <see cref="TryParse"/>) or an abbreviated <c>"X"</c> /
+    /// <c>"X.Y"</c>, read as <c>X.0.0</c> / <c>X.Y.0</c>. Used by the <c>PROP_SEMVER_*</c> operators.
+    /// </summary>
+    internal static bool TryParseAbbreviated(string? version, out SemanticVersion? result)
+    {
+        if (TryParse(version, out result)) return true;
+        if (string.IsNullOrEmpty(version)) return false;
+        var m = AbbreviatedRegex.Match(version!);
+        if (!m.Success) return false;
+        if (!int.TryParse(m.Groups["major"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var major)) return false;
+        int minor = 0;
+        if (m.Groups["minor"].Success
+            && !int.TryParse(m.Groups["minor"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out minor))
+        {
+            return false;
+        }
+        result = new SemanticVersion(major, minor, 0, "", "");
         return true;
     }
 
