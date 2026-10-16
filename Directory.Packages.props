@@ -10,7 +10,7 @@
     <PackageVersion Include="System.Text.Json" Version="8.0.5" />
     <PackageVersion Include="System.Threading.Channels" Version="8.0.0" />
     <!-- ImmutableDictionary backs ConfigStore. In-box on net8.0; PackageReference brings it to NS2.0. -->
-    <PackageVersion Include="System.Collections.Immutable" Version="8.0.0" />
+    <PackageVersion Include="System.Collections.Immutable" Version="10.0.12" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
     <!-- Microsoft.Extensions.Logging brings ILoggingBuilder + the default ILoggerFactory
          impl. Required by Quonfig.Sdk.Extensions.Logging for the builder-extension surface. -->
