@@ -428,6 +428,11 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
+    // HTTP+SSE delivery with a stream StartSse() will run: an SDK key, stream URLs, and neither
+    // a datadir nor a datafile (those modes install synchronously and never build a supervisor).
+    private bool StreamConfigured =>
+        !string.IsNullOrEmpty(_opts.SdkKey) && _streamUrls.Count > 0 && _isDeliveryMode;
+
     /// <inheritdoc/>
     public ConnectionState ConnectionState
     {
@@ -435,8 +440,13 @@ public sealed class Quonfig : IQuonfig
         {
             var sup = _supervisor;
             if (sup is not null) return sup.ConnectionState;
-            // No supervisor: either datadir/datafile mode (Connected after sync install) or
-            // HTTP-mode pre-init (Initializing). The install timestamp tells the two apart.
+            // No supervisor: datadir/datafile mode (Connected after sync install), or HTTP mode
+            // before StartSse() builds it. With a stream configured, HTTP mode stays Initializing
+            // until the stream reports: the init fetch completes InitAsync just before StartSse()
+            // runs, and reading Connected in that window would claim a stream that has not
+            // delivered a frame (sdk-go, sdk-java qfg-goi1.10.42). Without a stream there is
+            // never a supervisor, so the install timestamp decides, as in datadir mode.
+            if (StreamConfigured) return ConnectionState.Initializing;
             return LastSuccessfulRefresh is null ? ConnectionState.Initializing : ConnectionState.Connected;
         }
     }
