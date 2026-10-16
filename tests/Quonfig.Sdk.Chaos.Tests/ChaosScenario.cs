@@ -85,6 +85,9 @@ internal sealed class ChaosScenario
     {
         public int WithinMs { get; set; }
         public int MustHoldForMs { get; set; }
+        // ms from t=0 before which the harness does not evaluate this expectation at all
+        // (chaos README "Timeline rules" rule 1). Default 0.
+        public int AfterMs { get; set; }
         public string AssertExpr { get; set; } = string.Empty;
     }
 }

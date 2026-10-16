@@ -101,6 +101,43 @@ tests:
     }
 
     [Fact]
+    public void ParsesAfterMs()
+    {
+        const string yaml = @"
+function: sse_resilience
+tests:
+  - name: ""gated""
+    expectations:
+      - within_ms: 5000
+        after_ms: 1000
+        must_hold_for_ms: 2000
+        assert: ""client.connectionState() == 'connected'""
+";
+        var e = ChaosYamlLoader.LoadString(yaml).Tests[0].Expectations[0];
+        Assert.Equal(1000, e.AfterMs);
+        Assert.Equal(2000, e.MustHoldForMs);
+        Assert.Equal(5000, e.WithinMs);
+    }
+
+    [Fact]
+    public void RejectsUnknownExpectationKeyNamingIt()
+    {
+        // chaos README "Timeline rules" rule 4: a harness pinned to a newer ITD than it implements
+        // must fail loudly, not silently drop a timing field.
+        const string yaml = @"
+function: sse_resilience
+tests:
+  - name: ""typo""
+    expectations:
+      - within_ms: 5000
+        not_before_ms: 1000
+        assert: ""client.connectionState() == 'connected'""
+";
+        var ex = Assert.Throws<System.IO.InvalidDataException>(() => ChaosYamlLoader.LoadString(yaml));
+        Assert.Contains("not_before_ms", ex.Message);
+    }
+
+    [Fact]
     public void LoadsEveryRealScenarioWithExpectations()
     {
         // Sanity: every scenarios/*.yaml shipped with integration-test-data must parse cleanly

@@ -152,14 +152,17 @@ public sealed class ChaosTests
             StreamUrls = new[] { sseBase },
             // Datadir mode is N/A here — we want the HTTP+SSE path.
             InitTimeout = TimeSpan.FromSeconds(15),
-            // 5s Layer 1 read watchdog, mirroring sdk-go's chaos rig
-            // (withTestSSEReadTimeout(5s), chaos_test.go). The production 90s default loses
-            // scenario 02's timing race: stall injected at 5s + 90s watchdog = the Disconnected
-            // edge lands at ~95s, exactly on exp[1]'s within_ms=95000 deadline (observed red on
-            // the first CI run). The fixture api-delivery heartbeats every 1s
-            // (SSE_HEARTBEAT_INTERVAL=1s in run-chaos.sh), so 5s never false-fires in the
-            // healthy scenarios (01, 03, 11).
-            SseReadTimeout = TimeSpan.FromSeconds(5),
+            // Shortened Layer 1 read watchdog (production default 90s). 90s loses scenario 02's
+            // timing race: stall injected at 5s + 90s watchdog = the Disconnected edge lands at
+            // ~95s, exactly on exp[1]'s within_ms=95000 deadline (observed red on the first CI
+            // run). The fixture api-delivery heartbeats every 1s (SSE_HEARTBEAT_INTERVAL=1s in
+            // run-chaos.sh). 10s (as sdk-java's rig), not sdk-go's 5s: scenario 03 adds 5000ms
+            // latency to the SSE leg, which opens a ~6s gap between heartbeats once the toxic
+            // lands, and a 5s watchdog fired on it (a false Layer 1 restart, observed once the
+            // qfg-goi1.7 holds made 03 check its whole window). 02 (stall at 5s, restart within
+            // 95s) stays reachable; 07's half-open restart comes from the dropped connection
+            // (~5s), not the watchdog.
+            SseReadTimeout = TimeSpan.FromSeconds(10),
             Logger = logger,
             // Layer 2 engage delay stays at the cross-SDK default (120s) — scenario 05's
             // within_ms=135000 accommodates it.
@@ -281,52 +284,23 @@ public sealed class ChaosTests
         {
             while (DateTime.UtcNow < deadline)
             {
-                var now = DateTime.UtcNow;
-                var elapsedMs = (long)(now - baseline).TotalMilliseconds;
+                var elapsedMs = (long)(DateTime.UtcNow - baseline).TotalMilliseconds;
                 bool allTerminal = true;
                 foreach (var s in states)
                 {
-                    if (s.Passed || s.Failed || s.Skipped) continue;
-                    var r = evaluator.Evaluate(s.Exp.AssertExpr);
-                    s.LastReason = r.Reason;
-                    s.SkippedLeaves = r.SkippedLeaves;
-                    if (r.Outcome == ExpressionEvaluator.Verdict.Skipped)
+                    var terminal = ExpectationStep.Apply(s.Timeline, elapsedMs, () =>
                     {
-                        // The rig cannot evaluate this expectation at all (for example
-                        // server_metric): terminal SKIPPED with the reason, never a pass.
-                        s.Skipped = true;
-                        continue;
-                    }
-                    if (r.Passed)
-                    {
-                        if (s.HeldSince is null) { s.HeldSince = now; s.HitAtMs = elapsedMs; }
-                        var holdFor = TimeSpan.FromMilliseconds(s.Exp.MustHoldForMs);
-                        if (holdFor <= TimeSpan.Zero || (now - s.HeldSince.Value) >= holdFor)
-                        {
-                            s.Passed = true;
-                        }
-                        else
-                        {
-                            allTerminal = false;
-                        }
-                    }
-                    else
-                    {
-                        s.HeldSince = null;
-                        allTerminal = false;
-                    }
-                    if (!s.Passed && elapsedMs > s.Exp.WithinMs)
-                    {
-                        s.Failed = true;
-                    }
+                        var r = evaluator.Evaluate(s.Exp.AssertExpr);
+                        s.LastReason = r.Reason;
+                        s.SkippedLeaves = r.SkippedLeaves;
+                        return r.Outcome;
+                    });
+                    if (!terminal) allTerminal = false;
                 }
                 if (allTerminal) break;
                 await Task.Delay(pollMs);
             }
-            foreach (var s in states)
-            {
-                if (!s.Passed && !s.Skipped) s.Failed = true;
-            }
+            foreach (var s in states) ExpectationStep.Finish(s.Timeline);
         }
         finally
         {
@@ -366,12 +340,12 @@ public sealed class ChaosTests
                     ? string.Empty
                     : "  [not checked: " + string.Join(" | ", s.SkippedLeaves) + "]";
                 _out.WriteLine(
-                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms){skippedLeaves}");
+                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms after={s.Exp.AfterMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms){skippedLeaves}");
             }
             else
             {
                 fail++;
-                var msg = $"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr} — last reason: {s.LastReason}";
+                var msg = $"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms after={s.Exp.AfterMs}ms: {s.Exp.AssertExpr} — last reason: {s.LastReason}";
                 _out.WriteLine(msg);
                 failures.Add(msg);
             }
@@ -550,14 +524,13 @@ public sealed class ChaosTests
 
     private sealed class ExpState
     {
-        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Exp = exp; }
+        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Timeline = new ExpectationTimeline(exp); }
         public int Idx { get; }
-        public ChaosScenario.Expectation Exp { get; }
-        public long HitAtMs { get; set; }
-        public DateTime? HeldSince { get; set; }
-        public bool Passed { get; set; }
-        public bool Failed { get; set; }
-        public bool Skipped { get; set; }
+        public ExpectationTimeline Timeline { get; }
+        public ChaosScenario.Expectation Exp => Timeline.Exp;
+        public long HitAtMs => Timeline.HitAtMs;
+        public bool Passed => Timeline.Passed;
+        public bool Skipped => Timeline.Skipped;
         public string LastReason { get; set; } = string.Empty;
         public IReadOnlyList<ExpressionEvaluator.SkipNote> SkippedLeaves { get; set; } =
             Array.Empty<ExpressionEvaluator.SkipNote>();
