@@ -29,7 +29,14 @@ internal static class ChaosYamlLoader
         {
             throw new InvalidDataException($"chaos YAML {path}: root is not a mapping");
         }
-        return Parse(root);
+        try
+        {
+            return Parse(root);
+        }
+        catch (InvalidDataException ex)
+        {
+            throw new InvalidDataException($"{path}: {ex.Message}", ex);
+        }
     }
 
     public static ChaosScenario LoadString(string yamlText)
@@ -165,6 +172,14 @@ internal static class ChaosYamlLoader
         };
     }
 
+    // The expectation keys the schema allows (additionalProperties: false). chaos README
+    // "Timeline rules" rule 4: reject anything else, naming the key, so a harness pinned to a newer
+    // ITD than it implements fails loudly instead of silently dropping a timing field.
+    private static readonly HashSet<string> ExpectationKeys = new(StringComparer.Ordinal)
+    {
+        "within_ms", "assert", "must_hold_for_ms", "after_ms",
+    };
+
     private static List<ChaosScenario.Expectation> ParseExpectations(YamlNode? raw)
     {
         var list = new List<ChaosScenario.Expectation>();
@@ -172,10 +187,20 @@ internal static class ChaosYamlLoader
         foreach (var el in seq)
         {
             if (el is not YamlMappingNode em) continue;
+            foreach (var kv in em.Children)
+            {
+                var key = (kv.Key as YamlScalarNode)?.Value ?? kv.Key.ToString();
+                if (!ExpectationKeys.Contains(key))
+                {
+                    throw new InvalidDataException(
+                        $"chaos YAML: unknown expectation key \"{key}\" (allowed: within_ms, assert, must_hold_for_ms, after_ms)");
+                }
+            }
             list.Add(new ChaosScenario.Expectation
             {
                 WithinMs = AsInt(Lookup(em, "within_ms"), 0),
                 MustHoldForMs = AsInt(Lookup(em, "must_hold_for_ms"), 0),
+                AfterMs = AsInt(Lookup(em, "after_ms"), 0),
                 AssertExpr = AsString(Lookup(em, "assert")) ?? string.Empty,
             });
         }

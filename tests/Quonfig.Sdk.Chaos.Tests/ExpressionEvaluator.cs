@@ -134,6 +134,23 @@ internal sealed class ExpressionEvaluator
         return Leaf(e);
     }
 
+    /// <summary>
+    /// True when <paramref name="expr"/> evaluates to <see cref="Verdict.Skipped"/> from its shape
+    /// alone: every leaf is a <c>server_metric(...)</c> the rig cannot observe. Independent of time
+    /// and probe state, so the runner can report SKIPPED for such a row even while its
+    /// <c>after_ms</c> gate is closed (chaos README "Timeline rules" rule 1).
+    /// </summary>
+    public static bool IsShapeSkipped(string expr)
+    {
+        var e = (expr ?? string.Empty).Trim();
+        if (e.Length == 0) return false;
+        if (e.Contains(" OR ", StringComparison.Ordinal))
+            return System.Linq.Enumerable.All(SplitOutsideQuotesAndRegex(e, " OR "), IsShapeSkipped);
+        if (e.Contains(" AND ", StringComparison.Ordinal))
+            return System.Linq.Enumerable.All(SplitOutsideQuotesAndRegex(e, " AND "), IsShapeSkipped);
+        return ReServerMetric.IsMatch(e);
+    }
+
     private Result Leaf(string expr)
     {
         Match m;

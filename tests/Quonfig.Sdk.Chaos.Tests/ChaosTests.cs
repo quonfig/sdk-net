@@ -281,52 +281,23 @@ public sealed class ChaosTests
         {
             while (DateTime.UtcNow < deadline)
             {
-                var now = DateTime.UtcNow;
-                var elapsedMs = (long)(now - baseline).TotalMilliseconds;
+                var elapsedMs = (long)(DateTime.UtcNow - baseline).TotalMilliseconds;
                 bool allTerminal = true;
                 foreach (var s in states)
                 {
-                    if (s.Passed || s.Failed || s.Skipped) continue;
-                    var r = evaluator.Evaluate(s.Exp.AssertExpr);
-                    s.LastReason = r.Reason;
-                    s.SkippedLeaves = r.SkippedLeaves;
-                    if (r.Outcome == ExpressionEvaluator.Verdict.Skipped)
+                    var terminal = ExpectationStep.Apply(s.Timeline, elapsedMs, () =>
                     {
-                        // The rig cannot evaluate this expectation at all (for example
-                        // server_metric): terminal SKIPPED with the reason, never a pass.
-                        s.Skipped = true;
-                        continue;
-                    }
-                    if (r.Passed)
-                    {
-                        if (s.HeldSince is null) { s.HeldSince = now; s.HitAtMs = elapsedMs; }
-                        var holdFor = TimeSpan.FromMilliseconds(s.Exp.MustHoldForMs);
-                        if (holdFor <= TimeSpan.Zero || (now - s.HeldSince.Value) >= holdFor)
-                        {
-                            s.Passed = true;
-                        }
-                        else
-                        {
-                            allTerminal = false;
-                        }
-                    }
-                    else
-                    {
-                        s.HeldSince = null;
-                        allTerminal = false;
-                    }
-                    if (!s.Passed && elapsedMs > s.Exp.WithinMs)
-                    {
-                        s.Failed = true;
-                    }
+                        var r = evaluator.Evaluate(s.Exp.AssertExpr);
+                        s.LastReason = r.Reason;
+                        s.SkippedLeaves = r.SkippedLeaves;
+                        return r.Outcome;
+                    });
+                    if (!terminal) allTerminal = false;
                 }
                 if (allTerminal) break;
                 await Task.Delay(pollMs);
             }
-            foreach (var s in states)
-            {
-                if (!s.Passed && !s.Skipped) s.Failed = true;
-            }
+            foreach (var s in states) ExpectationStep.Finish(s.Timeline);
         }
         finally
         {
@@ -366,12 +337,12 @@ public sealed class ChaosTests
                     ? string.Empty
                     : "  [not checked: " + string.Join(" | ", s.SkippedLeaves) + "]";
                 _out.WriteLine(
-                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms){skippedLeaves}");
+                    $"PASS  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms after={s.Exp.AfterMs}ms: {s.Exp.AssertExpr}  (hit at {s.HitAtMs}ms){skippedLeaves}");
             }
             else
             {
                 fail++;
-                var msg = $"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms: {s.Exp.AssertExpr} — last reason: {s.LastReason}";
+                var msg = $"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs}ms hold={s.Exp.MustHoldForMs}ms after={s.Exp.AfterMs}ms: {s.Exp.AssertExpr} — last reason: {s.LastReason}";
                 _out.WriteLine(msg);
                 failures.Add(msg);
             }
@@ -550,14 +521,13 @@ public sealed class ChaosTests
 
     private sealed class ExpState
     {
-        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Exp = exp; }
+        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Timeline = new ExpectationTimeline(exp); }
         public int Idx { get; }
-        public ChaosScenario.Expectation Exp { get; }
-        public long HitAtMs { get; set; }
-        public DateTime? HeldSince { get; set; }
-        public bool Passed { get; set; }
-        public bool Failed { get; set; }
-        public bool Skipped { get; set; }
+        public ExpectationTimeline Timeline { get; }
+        public ChaosScenario.Expectation Exp => Timeline.Exp;
+        public long HitAtMs => Timeline.HitAtMs;
+        public bool Passed => Timeline.Passed;
+        public bool Skipped => Timeline.Skipped;
         public string LastReason { get; set; } = string.Empty;
         public IReadOnlyList<ExpressionEvaluator.SkipNote> SkippedLeaves { get; set; } =
             Array.Empty<ExpressionEvaluator.SkipNote>();

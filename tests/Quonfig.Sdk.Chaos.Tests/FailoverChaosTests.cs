@@ -273,36 +273,22 @@ public sealed class FailoverChaosTests
         {
             while (DateTime.UtcNow < deadline)
             {
-                var now = DateTime.UtcNow;
-                long elapsedMs = (long)(now - baseline).TotalMilliseconds;
+                long elapsedMs = (long)(DateTime.UtcNow - baseline).TotalMilliseconds;
                 bool allTerminal = true;
                 foreach (var s in states)
                 {
-                    if (s.Passed || s.Failed) continue;
-                    var r = evaluator.Evaluate(s.Exp.AssertExpr);
-                    s.LastReason = r.reason;
-                    if (r.passed)
+                    var terminal = ExpectationStep.Apply(s.Timeline, elapsedMs, () =>
                     {
-                        s.HeldSince ??= now;
-                        if (s.HitAtMs < 0) s.HitAtMs = elapsedMs;
-                        var holdFor = TimeSpan.FromMilliseconds(s.Exp.MustHoldForMs);
-                        if (holdFor <= TimeSpan.Zero || (now - s.HeldSince.Value) >= holdFor) s.Passed = true;
-                        else allTerminal = false;
-                    }
-                    else
-                    {
-                        s.HeldSince = null;
-                        allTerminal = false;
-                    }
-                    if (!s.Passed && elapsedMs > s.Exp.WithinMs) s.Failed = true;
+                        var r = evaluator.Evaluate(s.Exp.AssertExpr);
+                        s.LastReason = r.reason;
+                        return r.passed ? ExpressionEvaluator.Verdict.Pass : ExpressionEvaluator.Verdict.Fail;
+                    });
+                    if (!terminal) allTerminal = false;
                 }
                 if (allTerminal) break;
                 await Task.Delay(pollMs).ConfigureAwait(false);
             }
-            foreach (var s in states)
-            {
-                if (!s.Passed) s.Failed = true;
-            }
+            foreach (var s in states) ExpectationStep.Finish(s.Timeline);
         }
         finally
         {
@@ -320,11 +306,11 @@ public sealed class FailoverChaosTests
             if (s.Passed)
             {
                 pass++;
-                _out.WriteLine($"PASS  exp[{s.Idx}] within={s.Exp.WithinMs} hold={s.Exp.MustHoldForMs}: {s.Exp.AssertExpr} (hit {s.HitAtMs}ms)");
+                _out.WriteLine($"PASS  exp[{s.Idx}] within={s.Exp.WithinMs} hold={s.Exp.MustHoldForMs} after={s.Exp.AfterMs}: {s.Exp.AssertExpr} (hit {s.HitAtMs}ms)");
             }
             else
             {
-                _out.WriteLine($"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs} hold={s.Exp.MustHoldForMs}: {s.Exp.AssertExpr} — last: {s.LastReason}");
+                _out.WriteLine($"FAIL  exp[{s.Idx}] within={s.Exp.WithinMs} hold={s.Exp.MustHoldForMs} after={s.Exp.AfterMs}: {s.Exp.AssertExpr} — last: {s.LastReason}");
                 failures.Add($"exp[{s.Idx}] {s.Exp.AssertExpr} — last: {s.LastReason}");
             }
         }
@@ -566,13 +552,12 @@ public sealed class FailoverChaosTests
 
     private sealed class ExpState
     {
-        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Exp = exp; }
+        public ExpState(int idx, ChaosScenario.Expectation exp) { Idx = idx; Timeline = new ExpectationTimeline(exp); }
         public int Idx { get; }
-        public ChaosScenario.Expectation Exp { get; }
-        public long HitAtMs { get; set; } = -1;
-        public DateTime? HeldSince { get; set; }
-        public bool Passed { get; set; }
-        public bool Failed { get; set; }
+        public ExpectationTimeline Timeline { get; }
+        public ChaosScenario.Expectation Exp => Timeline.Exp;
+        public long HitAtMs => Timeline.HitAtMs;
+        public bool Passed => Timeline.Passed;
         public string LastReason { get; set; } = "";
     }
 
