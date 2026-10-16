@@ -42,7 +42,7 @@ public sealed class GetOrRaiseTests
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             SdkKey = "integration-tests",
-            ApiUrls = new[] { "https://app.staging-prefab.cloud" },
+            ApiUrls = new[] { "http://192.0.2.1:1" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromMilliseconds(10),
@@ -58,7 +58,7 @@ public sealed class GetOrRaiseTests
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             SdkKey = "integration-tests",
-            ApiUrls = new[] { "https://app.staging-prefab.cloud" },
+            ApiUrls = new[] { "http://192.0.2.1:1" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromMilliseconds(10),
