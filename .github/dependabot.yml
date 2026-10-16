@@ -26,6 +26,11 @@ updates:
       - dependencies
       - nuget
     open-pull-requests-limit: 5
+    ignore:
+      # FluentAssertions 8+ is commercially licensed by Xceed (6.x/7.x are
+      # Apache-2.0). Stay on 6.x; migrate to AwesomeAssertions if we need more.
+      - dependency-name: "FluentAssertions"
+        versions: [">=8.0.0"]
     groups:
       nuget-minor-patch:
         update-types: ["minor", "patch"]
