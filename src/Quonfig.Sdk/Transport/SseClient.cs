@@ -104,6 +104,13 @@ public sealed class SseClient : IDisposable
     internal TimeSpan HeaderTimeout { get; set; } = DefaultHeaderTimeout;
 
     /// <summary>
+    /// Test seam (qfg-goi1.10.28): when set, each reconnect sleep passes through it as
+    /// <c>("sse", requested)</c> and the loop sleeps the returned duration instead. Never a
+    /// customer option.
+    /// </summary>
+    internal Func<string, TimeSpan, TimeSpan>? WaitHook { get; set; }
+
+    /// <summary>
     /// Initializes a new SSE client. Lifecycle is driven by <see cref="RunAsync"/>; the
     /// caller passes the cancellation token used to stop the loop.
     /// </summary>
@@ -237,6 +244,8 @@ public sealed class SseClient : IDisposable
 
             // Jittered sleep then exponential backoff if the connect produced nothing.
             var sleep = ReconnectSleep(consumed, delay, _initialBackoff, _rng);
+            var hook = WaitHook;
+            if (hook is not null) sleep = hook("sse", sleep);
             try
             {
                 await Task.Delay(sleep, cancellationToken).ConfigureAwait(false);

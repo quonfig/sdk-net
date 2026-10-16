@@ -119,6 +119,9 @@ public sealed class Quonfig : IQuonfig
     private volatile HttpTransport? _httpTransport;
     private volatile Task? _sseRunTask;
     private CancellationTokenSource? _sseCts;
+    // Guards _sseCts / _sseClient / _sseRunTask: SSE is stopped on entry to auth-failed and
+    // restarted on exit (qfg-goi1.10.28), racing CloseAsync.
+    private readonly object _sseLock = new();
 
     private DateTimeOffset? _localLastRefresh;
     private ConnectionState _lastObservedState = ConnectionState.Initializing;
@@ -357,9 +360,18 @@ public sealed class Quonfig : IQuonfig
             await watcher.DisposeAsync().ConfigureAwait(false);
             _datadirWatcher = null;
         }
-        // Stop SSE first; the run task respects the CTS and unwinds.
-        try { _sseCts?.Cancel(); } catch (ObjectDisposedException) { }
-        var sseTask = _sseRunTask;
+        // Stop SSE first; the run task respects the CTS and unwinds. _closed is already set, so
+        // an auth-failed exit cannot start a new stream after this snapshot.
+        CancellationTokenSource? sseCts;
+        SseClient? sseClient;
+        Task? sseTask;
+        lock (_sseLock)
+        {
+            sseCts = _sseCts;
+            sseClient = _sseClient;
+            sseTask = _sseRunTask;
+        }
+        try { sseCts?.Cancel(); } catch (ObjectDisposedException) { }
         if (sseTask is not null)
         {
             try
@@ -373,9 +385,9 @@ public sealed class Quonfig : IQuonfig
         {
             await sup.StopAsync().ConfigureAwait(false);
         }
-        _sseClient?.Dispose();
+        sseClient?.Dispose();
         _httpTransport?.Dispose();
-        _sseCts?.Dispose();
+        sseCts?.Dispose();
 
         // Stop the telemetry reporter last: DisposeAsync gives the live window (eval summaries, context
         // shapes, failover counters) one POST with a 5s deadline and never drains the retained queue,
@@ -847,17 +859,24 @@ public sealed class Quonfig : IQuonfig
     /// <para>When <paramref name="initial"/> is true and every fired leg failed (nothing installed),
     /// this throws the last leg's error so <see cref="RunHttpInitAsync"/>'s catch clauses apply
     /// <see cref="OnInitFailure"/>. An all-304 / no-op cycle returns without throwing.</para>
+    ///
+    /// <para>Returns the cycle's <see cref="PollOutcome"/> for the auth-failure rule
+    /// (qfg-goi1.10.28, R2): answered when any leg returned 200 with a valid envelope or 304;
+    /// auth-rejected when no leg did and the PRIMARY leg's status is 401/403/404/410 (primary
+    /// 401 + secondary 503/timeout qualifies; primary 503 + secondary 401 does not). Only the
+    /// fallback poller acts on it; init and <see cref="RefreshAsync"/> ignore it.</para>
     /// </summary>
-    private async Task FetchAndInstallAsync(bool initial, CancellationToken cancellationToken)
+    private async Task<PollOutcome> FetchAndInstallAsync(bool initial, CancellationToken cancellationToken)
     {
         var transport = _httpTransport;
-        if (transport is null) return;
+        if (transport is null) return PollOutcome.Failed;
 
         var reader = transport.FetchHedgedAsync(cancellationToken);
 
         bool installedOnce = false;
         int fired = 0;
         int failures = 0;
+        int primaryStatus = 0;
         Exception? lastError = null;
 
         while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
@@ -865,6 +884,10 @@ public sealed class Quonfig : IQuonfig
             while (reader.TryRead(out var leg))
             {
                 fired++;
+                if (leg.LegIndex == 0)
+                {
+                    primaryStatus = leg.Status;
+                }
                 if (leg.Error is not null)
                 {
                     failures++;
@@ -937,7 +960,7 @@ public sealed class Quonfig : IQuonfig
 
         if (installedOnce)
         {
-            return;
+            return PollOutcome.Ok;
         }
 
         // Nothing installed. If every fired leg failed, surface the failure (init path applies
@@ -946,7 +969,15 @@ public sealed class Quonfig : IQuonfig
         {
             throw lastError;
         }
+        if (fired > 0 && failures == fired)
+        {
+            // Auth-failure rule R2: no leg answered and the primary returned an auth-class status.
+            return HttpTransport.IsAuthClassStatus(primaryStatus)
+                ? PollOutcome.AuthRejected(primaryStatus, transport.PrimaryHost)
+                : PollOutcome.Failed;
+        }
         // initial with an all-304 / empty cycle, or a non-initial refresh: a no-op success.
+        return PollOutcome.Ok;
     }
 
     /// <summary>
@@ -999,11 +1030,6 @@ public sealed class Quonfig : IQuonfig
         if (string.IsNullOrEmpty(_opts.SdkKey)) return;
         if (_streamUrls.Count == 0) return;
 
-        var streams = _streamUrls.Select(u => new Uri(u, UriKind.Absolute)).ToList();
-
-        var sseCts = new CancellationTokenSource();
-        _sseCts = sseCts;
-
         FallbackPoller? fp = null;
         if (_opts.FallbackPollEnabled && _opts.FallbackPollInterval > TimeSpan.Zero)
         {
@@ -1027,7 +1053,11 @@ public sealed class Quonfig : IQuonfig
                     _logger.LogInformation("quonfig: Layer 2 fallback poller disengaged (SSE recovered)");
                     UpdateConnectionState(Sdk.ConnectionState.Connected);
                 },
-                logger: _logger);
+                logger: _logger,
+                onAuthFailed: OnAuthFailedAsync)
+            {
+                WaitHook = _opts.TestWaitHook,
+            };
             _fallbackPoller = fp;
         }
 
@@ -1044,7 +1074,22 @@ public sealed class Quonfig : IQuonfig
         // does, fallback engages once the 120s threshold elapses.
         fp?.SetSseConnected(false);
 
-        var sse = new SseClient(
+        StartSseStream();
+    }
+
+    /// <summary>
+    /// Starts a brand-new <see cref="SseClient"/> (so it begins at its base backoff). Called at
+    /// startup and when the client leaves auth-failed (qfg-goi1.10.28, R4). No-op once closed.
+    /// </summary>
+    private void StartSseStream()
+    {
+        lock (_sseLock)
+        {
+            if (Volatile.Read(ref _closed) != 0) return;
+            var streams = _streamUrls.Select(u => new Uri(u, UriKind.Absolute)).ToList();
+            var sseCts = new CancellationTokenSource();
+            _sseCts = sseCts;
+            var sse = new SseClient(
             streamUrls: streams,
             sdkKey: _opts.SdkKey!,
             onEnvelope: env => OnSseEnvelope(env),
@@ -1052,16 +1097,77 @@ public sealed class Quonfig : IQuonfig
             onDisconnect: OnSseDisconnect,
             readTimeout: _opts.SseReadTimeout,
             messageHandler: _opts.HttpMessageHandler,
-            logger: _logger);
-        _sseClient = sse;
-
-        _sseRunTask = Task.Run(() => sse.RunAsync(sseCts.Token));
+            logger: _logger)
+            {
+                WaitHook = _opts.TestWaitHook,
+            };
+            _sseClient = sse;
+            _sseRunTask = Task.Run(() => sse.RunAsync(sseCts.Token));
+        }
     }
 
-    private async Task DoFallbackFetchAsync(CancellationToken ct)
+    /// <summary>
+    /// Stops the SSE stream and waits (bounded) for its loop to unwind, so no SSE attempt or SSE
+    /// log line lands after the caller's next step. Used on entry to auth-failed (R3: SSE is not
+    /// attempted while auth-failed).
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Best-effort teardown of a cancelled SSE loop; it must not take the poller down.")]
+    private async Task StopSseStreamAsync()
+    {
+        CancellationTokenSource? cts;
+        SseClient? sse;
+        Task? run;
+        lock (_sseLock)
+        {
+            cts = _sseCts;
+            sse = _sseClient;
+            run = _sseRunTask;
+            _sseCts = null;
+            _sseClient = null;
+            _sseRunTask = null;
+        }
+        try { cts?.Cancel(); } catch (ObjectDisposedException) { }
+        if (run is not null)
+        {
+            try
+            {
+                await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(5))).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // The loop's own fault is not ours to surface here.
+            }
+            if (run.IsCompleted)
+            {
+                sse?.Dispose();
+                cts?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Auth-failure rule hook from the fallback poller (qfg-goi1.10.28). On entry: stop SSE and
+    /// report <see cref="ConnectionState.Disconnected"/> (never falling_back, R6). On exit: restart
+    /// SSE as a brand-new client from its base backoff (R4); the state stays disconnected until
+    /// SSE connects.
+    /// </summary>
+    private async Task OnAuthFailedAsync(bool entered)
+    {
+        if (entered)
+        {
+            await StopSseStreamAsync().ConfigureAwait(false);
+            UpdateConnectionState(Sdk.ConnectionState.Disconnected);
+            return;
+        }
+        StartSseStream();
+    }
+
+    private async Task<PollOutcome> DoFallbackFetchAsync(CancellationToken ct)
     {
         var transport = _httpTransport;
-        if (transport is null) return;
+        if (transport is null) return PollOutcome.Failed;
         try
         {
             // Fallback poller hedges too (qfg-7h5d.1.14): fire the primary first, hedge the secondary
@@ -1069,11 +1175,12 @@ public sealed class Quonfig : IQuonfig
             // generation (reject-older), so a failover to an older secondary never regresses an
             // established client. RecordSuccessfulRefresh fires per ANSWERED leg inside the loop
             // (installed or not — a 304/same-gen answer is still a successful poll).
-            await FetchAndInstallAsync(initial: false, ct).ConfigureAwait(false);
+            return await FetchAndInstallAsync(initial: false, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // Shutdown path.
+            return PollOutcome.Failed;
         }
     }
 
@@ -1324,6 +1431,9 @@ public sealed class Quonfig : IQuonfig
     /// suite's f05 assertion catches a regression that reintroduces stream-leg walking.
     /// </summary>
     internal bool SseFailedOverToSecondary => (_sseClient?.MaxConnectedStreamIndex ?? -1) > 0;
+
+    /// <summary>Test/diagnostic: whether the Layer 2 fallback poller is engaged right now.</summary>
+    internal bool FallbackPollerActive => _fallbackPoller?.Active ?? false;
 
     /// <summary>
     /// Test/diagnostic: the failover-telemetry collector (hedge-fired / guard-rejected / resolved-from

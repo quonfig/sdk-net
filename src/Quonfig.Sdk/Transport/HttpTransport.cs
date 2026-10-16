@@ -449,7 +449,7 @@ public sealed class HttpTransport : IDisposable
                 {
                     // Not a config envelope (null, {}, {"error":..}): a leg error so the hedge fires
                     // the secondary and nothing is installed; the ETag is never stored (qfg-9dxb.3).
-                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)"));
+                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)"), sc);
                 }
                 // Store the ETag only AFTER the body validated, so a junk 200 can't pin itself as
                 // "current" through later 304s.
@@ -458,9 +458,9 @@ public sealed class HttpTransport : IDisposable
                 {
                     lock (_etagLock) { _etags[legIndex] = responseETag; }
                 }
-                return LegResult.Ok(legIndex, envelope, responseETag);
+                return LegResult.Ok(legIndex, envelope, responseETag, sc);
             }
-            return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}")));
+            return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}")), sc);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -487,6 +487,16 @@ public sealed class HttpTransport : IDisposable
             response?.Dispose();
         }
     }
+
+    /// <summary>
+    /// The auth class of the cross-SDK auth-failure rule (R1, qfg-goi1.10.28): HTTP 401, 403, 404
+    /// or 410 on a config fetch leg.
+    /// </summary>
+    internal static bool IsAuthClassStatus(int status) =>
+        status == 401 || status == 403 || status == 404 || status == 410;
+
+    /// <summary>The primary leg's <c>host[:port]</c>, for logs (never the key).</summary>
+    internal string PrimaryHost => _apiUrls[0].Authority;
 
     /// <summary>
     /// Clears leg <paramref name="legIndex"/>'s ETag slot if it still holds <paramref name="etag"/>.

@@ -21,7 +21,7 @@ namespace Quonfig.Sdk.Tests.Supervisor;
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Design", "CA1031",
     Justification = "Tests assert on counters/state; broad catch is fine.")]
-public sealed class SupervisorTests
+public sealed partial class SupervisorTests
 {
     // Test 1 — Supervisor restarts a worker that throws within 1000ms.
     [Fact]
