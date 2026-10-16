@@ -15,12 +15,12 @@ jobs:
         tfm: [net8.0, netstandard2.0]
     steps:
       - name: Checkout sdk-net
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           path: sdk-net
 
       - name: Checkout integration-test-data
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
