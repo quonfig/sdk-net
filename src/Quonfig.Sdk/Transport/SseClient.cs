@@ -121,8 +121,9 @@ public sealed class SseClient : IDisposable
     /// <param name="sdkKey">SDK key used as the password in HTTP Basic auth (<c>username=1</c>).</param>
     /// <param name="onEnvelope">Delegate invoked with each decoded <see cref="ConfigEnvelope"/>.
     /// Atomic-swap into the resolver is the caller's responsibility.</param>
-    /// <param name="onConnect">Optional delegate invoked after every 200-OK status edge — i.e.
-    /// each time a new SSE stream comes up. Paired one-to-one with <paramref name="onDisconnect"/>.
+    /// <param name="onConnect">Optional delegate invoked once per connection at its FIRST VALID
+    /// FRAME (a keepalive comment block or a config envelope), not at the 200 response headers
+    /// (qfg-goi1.10.41). Paired one-to-one with <paramref name="onDisconnect"/>.
     /// Callers wire this into the Quonfig instance to flip the <see cref="Supervisor.FallbackPoller"/>
     /// back into "SSE connected" and update <see cref="ConnectionState"/> to
     /// <see cref="ConnectionState.Connected"/>.</param>
@@ -224,25 +225,29 @@ public sealed class SseClient : IDisposable
     /// SSE does not fail over (the f05 invariant, sdk-go semantics). Failover is an HTTP-poll-only
     /// property: repointing the long-lived stream at a secondary would silently bind config
     /// freshness to the mirror and park SSE herds on infrastructure sized for poll traffic. A
-    /// dead primary is retried forever with exponential backoff (reset after any successful
-    /// read); during the outage the <see cref="Supervisor.FallbackPoller"/> covers freshness via
-    /// the hedged HTTP path, which does keep both legs.</para>
+    /// dead primary is retried forever with exponential backoff (reset only after a connection
+    /// that delivered its first valid frame, qfg-goi1.10.41); during the outage the
+    /// <see cref="Supervisor.FallbackPoller"/> covers freshness via the hedged HTTP path, which
+    /// does keep both legs.</para>
     /// </summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         var delay = _initialBackoff;
         while (!cancellationToken.IsCancellationRequested)
         {
+            // consumed == "this connection delivered a valid frame". A 200 that ends before its
+            // first frame (headers only, a block cut off by EOF, garbage) is a failed attempt and
+            // grows the backoff exactly like a connect error (qfg-goi1.10.41).
             bool consumed = await ConnectOnceAsync(0, cancellationToken).ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested) return;
             if (consumed)
             {
-                // Successful read — reset the long-tail backoff before reconnecting to the
-                // same (primary) stream endpoint.
+                // The connection delivered a frame — reset the long-tail backoff before
+                // reconnecting to the same (primary) stream endpoint.
                 delay = _initialBackoff;
             }
 
-            // Jittered sleep then exponential backoff if the connect produced nothing.
+            // Jittered sleep then exponential backoff if the connect delivered no frame.
             var sleep = ReconnectSleep(consumed, delay, _initialBackoff, _rng);
             var hook = WaitHook;
             if (hook is not null) sleep = hook("sse", sleep);
@@ -325,24 +330,34 @@ public sealed class SseClient : IDisposable
 #else
             var body = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
 #endif
-            // Record which stream leg this 200-OK connection was established with BEFORE the
-            // connect edge fires, so observers (the f05 chaos probe via Quonfig) read a
+            // Record which stream leg this 200-OK connection was established with BEFORE any
+            // connect edge can fire, so observers (the f05 chaos probe via Quonfig) read a
             // consistent value from inside the onConnect callback.
             if (urlIndex > Volatile.Read(ref _maxConnectedStreamIndex))
             {
                 Volatile.Write(ref _maxConnectedStreamIndex, urlIndex);
             }
 
-            // Fire onConnect on the 200-OK edge BEFORE we start reading bytes — the surrounding
-            // Quonfig uses this to flip the FallbackPoller back to "connected". Paired with the
-            // onDisconnect call in the finally so consumers always see a clean connect→disconnect
-            // sequence even if ParseStreamAsync returns without consuming a single byte.
+            // The 200 headers alone are NOT a connection (qfg-goi1.10.41): onConnect fires at the
+            // connection's FIRST VALID FRAME, from inside the parser and before that frame's
+            // envelope is handed over. The surrounding Quonfig uses it to flip the FallbackPoller
+            // back to "connected". onDisconnect in the finally fires only if onConnect did, so a
+            // connection that ends before its first frame reports no edge at all and leaves the
+            // poller's engage timer running.
             bool firedConnect = false;
             try
             {
-                FireSafe(_onConnect, "onConnect");
-                firedConnect = true;
-                return await ParseStreamAsync(body, _onEnvelope, _readTimeout, _logger, cancellationToken)
+                return await ParseStreamAsync(
+                        body,
+                        _onEnvelope,
+                        _readTimeout,
+                        _logger,
+                        () =>
+                        {
+                            firedConnect = true;
+                            FireSafe(_onConnect, "onConnect");
+                        },
+                        cancellationToken)
                     .ConfigureAwait(false);
             }
             finally
@@ -385,9 +400,12 @@ public sealed class SseClient : IDisposable
     /// <see cref="CancellationTokenSource"/> armed via
     /// <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/> disposes <paramref name="body"/>
     /// if no bytes arrive within <paramref name="readTimeout"/>; this unblocks
-    /// <see cref="StreamReader.ReadLineAsync()"/> and the method returns. Returns true iff at
-    /// least one byte was consumed (used by <see cref="RunAsync"/> to distinguish
-    /// "live stream that ended" from "couldn't connect").
+    /// <see cref="StreamReader.ReadLineAsync()"/> and the method returns. Returns true iff the
+    /// stream delivered at least one VALID FRAME (qfg-goi1.10.41): a blank-line-terminated block
+    /// that is comment-only (the server keepalive) or whose <c>data:</c> decodes and validates as
+    /// a config envelope. Headers alone, a block cut off by EOF, malformed or non-envelope data,
+    /// and an <c>id:</c>-only or empty block are not frames. <see cref="RunAsync"/> resets its
+    /// backoff only when this is true.
     /// </summary>
     public static Task<bool> ParseStreamAsync(
         Stream body,
@@ -399,6 +417,18 @@ public sealed class SseClient : IDisposable
     /// <summary>
     /// Logger-aware overload. See the no-logger variant for behavior.
     /// </summary>
+    public static Task<bool> ParseStreamAsync(
+        Stream body,
+        Action<ConfigEnvelope> onEnvelope,
+        TimeSpan readTimeout,
+        ILogger logger,
+        CancellationToken cancellationToken)
+        => ParseStreamAsync(body, onEnvelope, readTimeout, logger, onFirstFrame: null, cancellationToken);
+
+    /// <summary>
+    /// Frame-aware overload: <paramref name="onFirstFrame"/> runs once, at the first valid frame,
+    /// before that frame's envelope (if any) reaches <paramref name="onEnvelope"/>.
+    /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Reliability", "CA2000:Dispose objects before losing scope",
         Justification = "watchdog CTS lifetime is bound to the using statement.")]
@@ -408,11 +438,12 @@ public sealed class SseClient : IDisposable
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Usage", "CA1849:Call async methods when in an async method",
         Justification = "Stream.Dispose in the watchdog callback is intentional — the callback runs on a timer thread, not the awaiter, and the dispose is what unblocks the in-flight read.")]
-    public static async Task<bool> ParseStreamAsync(
+    internal static async Task<bool> ParseStreamAsync(
         Stream body,
         Action<ConfigEnvelope> onEnvelope,
         TimeSpan readTimeout,
         ILogger logger,
+        Action? onFirstFrame,
         CancellationToken cancellationToken)
     {
 #if NET8_0_OR_GREATER
@@ -464,7 +495,11 @@ public sealed class SseClient : IDisposable
         // not via the reader.
         using var reader = new StreamReader(body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
         var dataBuf = new StringBuilder();
-        bool anyRead = false;
+        bool frameSeen = false;
+        // Per-block flags, reset at every blank line: a block is a keepalive frame only if it
+        // holds at least one comment line and no field line.
+        bool sawComment = false;
+        bool sawField = false;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -480,26 +515,25 @@ public sealed class SseClient : IDisposable
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    return anyRead;
+                    return frameSeen;
                 }
                 catch (ObjectDisposedException)
                 {
                     // Watchdog disposed the body mid-read; or the outer caller closed it.
-                    return anyRead;
+                    return frameSeen;
                 }
                 catch (IOException)
                 {
                     // Socket reset, EOF mid-read, dispose-induced. Treat as normal stream end.
-                    return anyRead;
+                    return frameSeen;
                 }
 
                 if (line is null)
                 {
                     // EOF — server closed the stream.
-                    return anyRead;
+                    return frameSeen;
                 }
 
-                anyRead = true;
                 if (watchdogEnabled && !stallFired)
                 {
                     // Re-arm the watchdog on every successful read.
@@ -509,13 +543,27 @@ public sealed class SseClient : IDisposable
 
                 if (line.Length == 0)
                 {
-                    Flush(dataBuf, onEnvelope, logger);
+                    var envelope = Decode(dataBuf, logger);
+                    bool isFrame = envelope is not null || (sawComment && !sawField);
+                    sawComment = false;
+                    sawField = false;
+                    if (isFrame && !frameSeen)
+                    {
+                        frameSeen = true;
+                        onFirstFrame?.Invoke();
+                    }
+                    if (envelope is not null)
+                    {
+                        Deliver(envelope, onEnvelope, logger);
+                    }
                     continue;
                 }
                 if (line[0] == ':')
                 {
+                    sawComment = true;
                     continue;
                 }
+                sawField = true;
                 string? rest = StripFieldPrefix(line, "data:");
                 if (rest is not null)
                 {
@@ -529,7 +577,7 @@ public sealed class SseClient : IDisposable
         {
             disposeOnStall.Dispose();
         }
-        return anyRead;
+        return frameSeen;
     }
 
     /// <summary>
@@ -561,9 +609,11 @@ public sealed class SseClient : IDisposable
         return Jitter(TimeSpan.FromMilliseconds(capped), rng);
     }
 
-    private static void Flush(StringBuilder dataBuf, Action<ConfigEnvelope> onEnvelope, ILogger logger)
+    // Decodes the buffered data block. Returns null (and clears the buffer) when the block is
+    // empty, malformed, or valid JSON that is not a config envelope — none of which is a frame.
+    private static ConfigEnvelope? Decode(StringBuilder dataBuf, ILogger logger)
     {
-        if (dataBuf.Length == 0) return;
+        if (dataBuf.Length == 0) return null;
         string payload = dataBuf.ToString();
         dataBuf.Clear();
         ConfigEnvelope? envelope;
@@ -574,16 +624,21 @@ public sealed class SseClient : IDisposable
         catch (JsonException ex)
         {
             logger.LogWarning(ex, "SSE: discarding malformed envelope: {Message}", ex.Message);
-            return;
+            return null;
         }
-        if (envelope is null) return;
+        if (envelope is null) return null;
         if (!envelope.IsWellFormed())
         {
             // Valid JSON but not a config envelope (no meta.version) — drop it exactly like
             // malformed JSON; installing it would wipe every key (qfg-9dxb.3).
             logger.LogWarning("SSE: discarding event that is not a config envelope (missing meta.version)");
-            return;
+            return null;
         }
+        return envelope;
+    }
+
+    private static void Deliver(ConfigEnvelope envelope, Action<ConfigEnvelope> onEnvelope, ILogger logger)
+    {
         try
         {
             onEnvelope(envelope);

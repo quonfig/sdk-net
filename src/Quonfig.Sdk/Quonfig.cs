@@ -1218,7 +1218,8 @@ public sealed class Quonfig : IQuonfig
 
     private void OnSseConnect()
     {
-        // 200-OK edge from the SSE worker. Tell the fallback poller SSE is live and flip
+        // First-valid-frame edge from the SSE worker (a keepalive or an envelope; the 200
+        // headers alone do not count, qfg-goi1.10.41). Tell the fallback poller SSE is live and flip
         // the customer-visible ConnectionState. If Layer 2 happened to be engaged, the
         // SetSseConnected(true) call triggers its disengage path.
         _fallbackPoller?.SetSseConnected(true);
