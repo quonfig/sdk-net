@@ -89,6 +89,36 @@ public sealed class GetOrRaiseTests
         Assert.Throws<QuonfigCoercionException>(() => client.GetLong("provided.not.a.number"));
     }
 
+    [Fact(DisplayName = "coercion error for an int env var names the variable and never its value")]
+    public async Task CoercionErrorForAnIntEnvVarNamesTheVariableAndNeverItsValue()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigCoercionException>(() => client.GetLong("provided.secret.not.an.int"));
+        Assert.Contains("environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to int for config \"provided.secret.not.an.int\"", raised.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", raised.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("postgres://", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "coercion error for a double env var names the variable and never its value")]
+    public async Task CoercionErrorForADoubleEnvVarNamesTheVariableAndNeverItsValue()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_SECRET_ENV", "postgres://admin:hunter2@db");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigCoercionException>(() => client.GetDouble("provided.secret.not.a.double"));
+        Assert.Contains("environment variable \"QUONFIG_ITD_SECRET_ENV\" cannot be converted to double for config \"provided.secret.not.a.double\"", raised.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", raised.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("postgres://", raised.Message, StringComparison.Ordinal);
+    }
+
     [Fact(DisplayName = "raises an error for decryption failure")]
     public async Task RaisesAnErrorForDecryptionFailure()
     {
