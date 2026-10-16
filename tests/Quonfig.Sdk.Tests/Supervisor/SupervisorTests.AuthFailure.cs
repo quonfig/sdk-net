@@ -222,7 +222,9 @@ public sealed partial class SupervisorTests
             if (cycle == 1) return new Resp(200, 1);
             if (leg == 0) return new Resp(status);
             return second == "timeout"
-                ? new Resp(200, 9, delay: TimeSpan.FromMilliseconds(400))
+                // A 30s hang against a 100ms per-leg abort: a decisive margin even on a starved
+                // windows/net48 runner (a 400ms hang let the 200 land there once).
+                ? new Resp(200, 9, delay: TimeSpan.FromSeconds(30))
                 : new Resp(503);
         };
         await r.StartAsync(2, o => o.ConfigFetchHedgeAbort = TimeSpan.FromMilliseconds(100));
