@@ -130,16 +130,21 @@ public sealed class SseFirstFrameTests
     [Fact]
     public async Task Test9c_KeepaliveThenClose_ConnectedPerAttempt_BackoffStaysAtInitial()
     {
-        // Threshold 2s exceeds the longest initial-delay sleep (1.2s), so the poller would only
-        // engage if the connect edge were missing.
+        // Threshold 3s exceeds the longest initial-delay sleep (1.2s) with room for a loaded
+        // runner, so the poller would only engage if the connect edge were missing. The window
+        // runs past the threshold so "poller never active" is not vacuous.
+        var threshold = TimeSpan.FromSeconds(3);
         using var server = new FrameServer(async (_, s, ct) =>
         {
             await FrameServer.WriteSseHeadersAsync(s, ct);
             await FrameServer.WriteAsync(s, ": keepalive\n\n", ct);
         });
-        await using var rig = await ClientRig.StartAsync(server, threshold: TimeSpan.FromSeconds(2));
+        await using var rig = await ClientRig.StartAsync(server, threshold: threshold);
 
-        await WaitForAsync(() => server.SseAttempts >= 3, TimeSpan.FromSeconds(5));
+        var started = server.Clock.Elapsed;
+        await WaitForAsync(
+            () => server.SseAttempts >= 3 && server.Clock.Elapsed - started >= threshold + TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromSeconds(8));
         await Task.Delay(100);
         rig.StopSampler();
         int attempts = server.SseAttempts;
