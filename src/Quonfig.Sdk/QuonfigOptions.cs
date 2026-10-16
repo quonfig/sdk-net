@@ -287,6 +287,14 @@ public sealed class QuonfigOptions
     internal ITelemetryClock? TelemetryClock { get; set; }
 
     /// <summary>
+    /// Test seam (qfg-goi1.10.28, supervisor contract Test 8): every background wait the SSE
+    /// reconnect loop and the fallback poller request passes through this hook as
+    /// <c>(kind, requested)</c>; the SDK waits the returned duration. Lets tests assert the
+    /// requested values without sleeping minutes. Never a customer option.
+    /// </summary>
+    internal Func<string, TimeSpan, TimeSpan>? TestWaitHook { get; set; }
+
+    /// <summary>
     /// When set, <see cref="Quonfig.ShouldLog"/> evaluates this single config (with the logger
     /// path injected as <c>quonfig-sdk-logging.key</c>) instead of walking per-logger keys. Mirrors
     /// sdk-node / sdk-go behavior.

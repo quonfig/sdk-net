@@ -26,18 +26,26 @@ internal readonly struct LegResult : IEquatable<LegResult>
     /// <summary>The ETag this leg stored from its 200 response, or <c>null</c> (qfg-9dxb.9 follow-up).</summary>
     public string? ETag { get; }
 
-    private LegResult(int legIndex, ConfigEnvelope? envelope, bool notModified, Exception? error, string? etag = null)
+    /// <summary>
+    /// The HTTP status the leg answered with, or <c>0</c> when there was no response (timeout,
+    /// transport error, cancellation). Carried so a fetch cycle can classify the PRIMARY leg's
+    /// status for the auth-failure rule (qfg-goi1.10.28, R2).
+    /// </summary>
+    public int Status { get; }
+
+    private LegResult(int legIndex, ConfigEnvelope? envelope, bool notModified, Exception? error, string? etag, int status)
     {
         LegIndex = legIndex;
         Envelope = envelope;
         NotModified = notModified;
         Error = error;
         ETag = etag;
+        Status = status;
     }
 
-    internal static LegResult Ok(int leg, ConfigEnvelope env, string? etag = null) => new(leg, env, false, null, etag);
-    internal static LegResult Unchanged(int leg) => new(leg, null, true, null);
-    internal static LegResult Fail(int leg, Exception err) => new(leg, null, false, err);
+    internal static LegResult Ok(int leg, ConfigEnvelope env, string? etag = null, int status = 200) => new(leg, env, false, null, etag, status);
+    internal static LegResult Unchanged(int leg) => new(leg, null, true, null, null, 304);
+    internal static LegResult Fail(int leg, Exception err, int status = 0) => new(leg, null, false, err, null, status);
 
     /// <inheritdoc/>
     public bool Equals(LegResult other) =>
@@ -45,14 +53,15 @@ internal readonly struct LegResult : IEquatable<LegResult>
         && ReferenceEquals(Envelope, other.Envelope)
         && NotModified == other.NotModified
         && ReferenceEquals(Error, other.Error)
-        && string.Equals(ETag, other.ETag, StringComparison.Ordinal);
+        && string.Equals(ETag, other.ETag, StringComparison.Ordinal)
+        && Status == other.Status;
 
     /// <inheritdoc/>
     public override bool Equals(object? obj) => obj is LegResult other && Equals(other);
 
     /// <inheritdoc/>
     public override int GetHashCode() =>
-        (LegIndex, Envelope, NotModified, Error, ETag).GetHashCode();
+        (LegIndex, Envelope, NotModified, Error, ETag, Status).GetHashCode();
 
     public static bool operator ==(LegResult left, LegResult right) => left.Equals(right);
 
