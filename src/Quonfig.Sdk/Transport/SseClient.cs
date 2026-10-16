@@ -55,8 +55,11 @@ public sealed class SseClient : IDisposable
     /// <summary>Default initial reconnect delay (1s) before exponential backoff kicks in.</summary>
     public static readonly TimeSpan DefaultInitialBackoff = TimeSpan.FromSeconds(1);
 
-    /// <summary>Default upper bound for reconnect backoff (60s).</summary>
-    public static readonly TimeSpan DefaultMaxBackoff = TimeSpan.FromSeconds(60);
+    /// <summary>
+    /// Default upper bound for reconnect backoff (30s, jitter included), the same cap as sdk-go,
+    /// sdk-node and supervisor contract Test 2 (qfg-n3nr).
+    /// </summary>
+    public static readonly TimeSpan DefaultMaxBackoff = TimeSpan.FromSeconds(30);
 
     private const string SsePath = "/api/v2/sse/config";
 
@@ -595,7 +598,8 @@ public sealed class SseClient : IDisposable
 
     /// <summary>
     /// Computes the next reconnect delay: doubles <paramref name="current"/>, caps at
-    /// <paramref name="max"/>, then applies ±20% jitter. Public so tests can pin the math.
+    /// <paramref name="max"/>, applies ±20% jitter, then caps at <paramref name="max"/> again so
+    /// the jitter never pushes a sleep past the cap (qfg-n3nr). Public so tests can pin the math.
     /// </summary>
     public static TimeSpan NextBackoff(TimeSpan current, TimeSpan max, Random rng)
     {
@@ -606,7 +610,8 @@ public sealed class SseClient : IDisposable
 #endif
         double doubled = current.TotalMilliseconds * 2.0;
         double capped = Math.Min(doubled, max.TotalMilliseconds);
-        return Jitter(TimeSpan.FromMilliseconds(capped), rng);
+        double jittered = Jitter(TimeSpan.FromMilliseconds(capped), rng).TotalMilliseconds;
+        return TimeSpan.FromMilliseconds(Math.Min(jittered, max.TotalMilliseconds));
     }
 
     // Decodes the buffered data block. Returns null (and clears the buffer) when the block is

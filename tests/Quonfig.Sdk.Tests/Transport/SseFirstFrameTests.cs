@@ -90,6 +90,40 @@ public sealed class SseFirstFrameTests
         }
     }
 
+    // ---------------------------------------------------------------- init window
+
+    [Fact]
+    public async Task StateRightAfterInit_IsInitializing_BeforeAnyStreamFrame()
+    {
+        // The init fetch completes InitAsync before StartSse() builds the supervisor. In that
+        // window ConnectionState read Connected (no supervisor + an install timestamp), then
+        // flipped back to Initializing once the supervisor existed. With a stream configured it
+        // must read Initializing until the stream delivers a frame (sdk-go, sdk-java PR 34).
+        using var server = new FrameServer(async (_, s, ct) =>
+        {
+            await FrameServer.WriteSseHeadersAsync(s, ct);
+            await Task.Delay(Timeout.Infinite, ct);
+        });
+        var states = new List<ConnectionState>();
+        for (int i = 0; i < 20; i++)
+        {
+            await using var client = new Quonfig(new QuonfigOptions
+            {
+                SdkKey = "test-sdk-key",
+                ApiUrls = new[] { server.BaseUri.ToString() },
+                StreamUrls = new[] { server.BaseUri.ToString() },
+                InitTimeout = TimeSpan.FromSeconds(5),
+                CollectEvaluationSummaries = false,
+                ContextUploadMode = ContextUploadMode.None,
+            });
+            await client.InitAsync();
+            states.Add(client.ConnectionState);
+        }
+
+        states.Should().OnlyContain(st => st == ConnectionState.Initializing,
+            "no stream frame has arrived yet (saw {0})", string.Join(",", states));
+    }
+
     // ---------------------------------------------------------------- 9b
 
     [Fact]
