@@ -273,7 +273,7 @@ internal sealed class SupervisorAuthRig : IAsyncDisposable
     /// sdk-net's SSE reconnect ladder from a fresh client
     /// (<see cref="Transport.SseClient.RunAsync"/> + <see cref="Transport.SseClient.NextBackoff"/>):
     /// the first failed connect sleeps the 1s base unjittered, then each sleep is the previous
-    /// sleep doubled, capped at 60s, with +/-20% jitter.
+    /// sleep doubled, capped at 30s, with +/-20% jitter, then capped at 30s again (qfg-n3nr).
     /// </summary>
     public static List<string> CheckSseLadder(IReadOnlyList<TimeSpan> waits)
     {
@@ -283,12 +283,12 @@ internal sealed class SupervisorAuthRig : IAsyncDisposable
         {
             double w = waits[k].TotalMilliseconds;
             double lo = k == 0 ? expect : expect * 0.8;
-            double hi = k == 0 ? expect : expect * 1.2;
+            double hi = k == 0 ? expect : Math.Min(expect * 1.2, 30_000);
             if (w < lo - 1 || w > hi + 1)
             {
                 errs.Add($"SSE sleep #{k + 1} = {waits[k]}, want within [{TimeSpan.FromMilliseconds(lo)}, {TimeSpan.FromMilliseconds(hi)}]");
             }
-            expect = Math.Min(w * 2, 60_000);
+            expect = Math.Min(w * 2, 30_000);
         }
         return errs;
     }

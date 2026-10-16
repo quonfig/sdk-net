@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fixed (patch): the SSE reconnect backoff caps at 30 s, jitter included (qfg-n3nr).** It capped at 60 s with +/-20% jitter, so after a long stream outage the next reconnect could land up to 72 s after the server came back (the fallback poller kept config fresh meanwhile). It now caps at 30 s like sdk-go, sdk-node, sdk-python and supervisor contract Test 2, and the jitter never pushes a sleep past the cap. `SseClient.DefaultMaxBackoff` is now 30 s; a `maxBackoff` passed to the `SseClient` constructor is still honored.
 - **Changed (minor): SSE counts as connected at the first frame, not at the 200 response (qfg-goi1.10.41).** **UPGRADE: SSE reports `connected` at the first frame, not at the 200 response (qfg-goi1.10.9).** A stream connection now counts as connected, for `ConnectionState`, the `OnConnectionStateChange` event, the reconnect backoff and the fallback poller, only after it delivers its first valid frame: a config envelope or a keepalive. Before, it counted as soon as the 200 response headers arrived.
   - Against Quonfig's servers the headers and the first frame arrive together, so you should see no difference.
   - Behind a proxy or server that sends 200 headers early, `connected` is reported when the first frame arrives: at most one keepalive interval (30 s) later.

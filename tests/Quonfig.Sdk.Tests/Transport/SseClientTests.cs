@@ -214,7 +214,7 @@ public sealed class SseClientTests
     public void NextBackoff_GrowsExponentiallyAndCapsAtMax()
     {
         var rng = new Random(12345);
-        var max = TimeSpan.FromSeconds(60);
+        var max = SseClient.DefaultMaxBackoff; // 30s (qfg-n3nr)
 
         // First call to NextBackoff(1s) — formula: min(2*current, max) * jitter[0.8, 1.2)
         var d1 = SseClient.NextBackoff(TimeSpan.FromSeconds(1), max, rng);
@@ -230,13 +230,16 @@ public sealed class SseClientTests
         d3.Should().BeGreaterThanOrEqualTo(TimeSpan.FromMilliseconds(6400));
         d3.Should().BeLessThan(TimeSpan.FromMilliseconds(9600));
 
-        // Cap: once we're at 60s, the next backoff is capped at 60s before jitter,
-        // so the absolute upper bound is 60s * 1.2 = 72s.
-        var capped = SseClient.NextBackoff(TimeSpan.FromSeconds(120), max, rng);
-        capped.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(72),
-            "cap is 60s + 20% upper jitter");
-        capped.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(48),
-            "cap is 60s - 20% lower jitter");
+        // Cap: once we're at the cap, the backoff is capped before jitter and again after it,
+        // so a sleep is never above 30s and never below 30s * 0.8 = 24s.
+        for (int i = 0; i < 200; i++)
+        {
+            var capped = SseClient.NextBackoff(TimeSpan.FromSeconds(120), max, rng);
+            capped.Should().BeLessThanOrEqualTo(TimeSpan.FromSeconds(30),
+                "jitter never pushes a sleep past the 30s cap");
+            capped.Should().BeGreaterThanOrEqualTo(TimeSpan.FromSeconds(24),
+                "cap is 30s - 20% lower jitter");
+        }
     }
 
     [Fact]
