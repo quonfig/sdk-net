@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.8.1 - 2026-10-20
 
 - **Fixed (patch): `System.Collections.Immutable` dependency floor lowered back to 8.0.0.** 1.7.0 and 1.8.0 declared `System.Collections.Immutable >= 10.0.12` (an unintended Dependabot bump), which forced every consumer onto the 10.x package. The SDK only needs 8.0.0, in line with its other `System.*` and `Microsoft.Extensions.*` dependencies; consumers that already resolved 10.x keep working.
+- **Dependencies (patch): runtime dependency minimums raised within their current majors** by the routine Dependabot minor/patch group: `System.Text.Json` 8.0.6, `Microsoft.Extensions.Logging.Abstractions` 8.0.3, `Serilog` 4.4.0 (Quonfig.Sdk.Serilog), `BouncyCastle.Cryptography` 2.7.0 (netstandard2.0). No new majors.
 
 ## 1.8.0 - 2026-10-20
 

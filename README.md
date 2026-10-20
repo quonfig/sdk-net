@@ -21,7 +21,7 @@ dotnet add package Quonfig.Sdk.Serilog
 Or via `<PackageReference>`:
 
 ```xml
-<PackageReference Include="Quonfig.Sdk" Version="1.8.0" />
+<PackageReference Include="Quonfig.Sdk" Version="1.8.1" />
 ```
 
 ## Packages
