@@ -1011,7 +1011,19 @@ public sealed class Quonfig : IQuonfig
     {
         if (_opts.OnInitFailure == OnInitFailure.Throw)
         {
+            // InitAsync surfaces the failure, but a caller that catches it and keeps this object
+            // must still get a client that heals (qfg-9p4i.3; no permanently dead clients). Keep
+            // the update channel alive exactly as ReturnDefaults does: SSE plus the fallback
+            // poller install the first envelope once delivery is reachable again.
+            InstallEmptyStoreIfNeeded();
             _initTcs.TrySetException(error);
+            if (Volatile.Read(ref _closed) == 0 && !string.IsNullOrEmpty(_opts.SdkKey) && _streamUrls.Count > 0)
+            {
+                _logger.LogWarning(
+                    error,
+                    "quonfig: initial config fetch failed under OnInitFailure.Throw; InitAsync raises, and the client keeps retrying in the background in case the caller keeps it");
+            }
+            StartSse();
             return;
         }
         // ReturnDefaults: complete init successfully; SSE supervisor will keep trying.
