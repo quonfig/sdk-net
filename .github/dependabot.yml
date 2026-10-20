@@ -31,6 +31,18 @@ updates:
       # Apache-2.0). Stay on 6.x; migrate to AwesomeAssertions if we need more.
       - dependency-name: "FluentAssertions"
         versions: [">=8.0.0"]
+      # Runtime dependencies of the published packages. A NuGet version is a
+      # minimum floor, so a major bump here forces every customer onto that
+      # major (e.g. System.* 8 -> 10). Keep floors on the lowest supported
+      # band; raise them deliberately in a release, not via Dependabot.
+      - dependency-name: "System.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.Extensions.*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Serilog"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "BouncyCastle.Cryptography"
+        update-types: ["version-update:semver-major"]
     groups:
       nuget-minor-patch:
         update-types: ["minor", "patch"]

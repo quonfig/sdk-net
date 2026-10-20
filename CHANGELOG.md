@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed (patch): `System.Collections.Immutable` dependency floor lowered back to 8.0.0.** 1.7.0 and 1.8.0 declared `System.Collections.Immutable >= 10.0.12` (an unintended Dependabot bump), which forced every consumer onto the 10.x package. The SDK only needs 8.0.0, in line with its other `System.*` and `Microsoft.Extensions.*` dependencies; consumers that already resolved 10.x keep working.
+
 ## 1.8.0 - 2026-10-20
 
 - **Changed (minor): SSE counts as connected at the first frame, not at the 200 response (qfg-goi1.10.41).** **UPGRADE: SSE reports `connected` at the first frame, not at the 200 response (qfg-goi1.10.9).** A stream connection now counts as connected, for `ConnectionState`, the `OnConnectionStateChange` event, the reconnect backoff and the fallback poller, only after it delivers its first valid frame: a config envelope or a keepalive. Before, it counted as soon as the 200 response headers arrived.
