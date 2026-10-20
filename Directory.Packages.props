@@ -42,7 +42,7 @@
     <PackageVersion Include="WireMock.Net" Version="1.6.7" />
     <!-- YamlDotNet — chaos scenarios live as YAML under ../integration-test-data/chaos/scenarios/.
          Used only from Quonfig.Sdk.Chaos.Tests; the SDK proper has no YAML dependency. -->
-    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
+    <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <!-- Xunit.SkippableFact — chaos tests must skip cleanly when QUONFIG_CHAOS_RUN!=1 so the
          default `dotnet test` reports skipped (not failed/passed). -->
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.85" />
