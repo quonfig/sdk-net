@@ -11,7 +11,9 @@
     <IsTestProject>true</IsTestProject>
     <!-- CA1707: snake_case test method names. CA2007: ConfigureAwait noise in tests.
          CA1861: constant array args are clearer than static-readonly fields in assertions. -->
-    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861</NoWarn>
+    <!-- CS0618: the generated integration cases (get_or_raise.yaml "deprecated on_init_failure
+         raise/return") deliberately exercise the [Obsolete] OnInitFailure.Throw / ReturnDefaults aliases. -->
+    <NoWarn>$(NoWarn);CA1707;CA2007;CA1861;CS0618</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

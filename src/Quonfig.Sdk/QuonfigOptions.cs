@@ -168,8 +168,12 @@ public sealed class QuonfigOptions
     /// </summary>
     public TimeSpan ConfigFetchHedgeAbort { get; set; } = TimeSpan.FromSeconds(6);
 
-    /// <summary>Policy when initial HTTP+SSE load exceeds <see cref="InitTimeout"/>. Defaults to <see cref="OnInitFailure.Throw"/>.</summary>
-    public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Throw;
+    /// <summary>
+    /// What <see cref="Quonfig.InitAsync"/> does when no config has arrived by <see cref="InitTimeout"/>:
+    /// <see cref="OnInitFailure.Fail"/> (default), <see cref="OnInitFailure.Wait"/> or
+    /// <see cref="OnInitFailure.Continue"/>.
+    /// </summary>
+    public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Fail;
 
     /// <summary>Policy when a typed getter cannot resolve a value AND the caller supplied no default. Defaults to <see cref="Sdk.OnNoDefault.Throw"/>.</summary>
     public OnNoDefault OnNoDefault { get; set; } = OnNoDefault.Throw;

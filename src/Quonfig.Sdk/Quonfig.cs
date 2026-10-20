@@ -101,6 +101,21 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     private readonly bool _isDeliveryMode;
     private readonly TaskCompletionSource<bool> _initTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Completes on the first config install (network, datadir or datafile). Backs <see cref="IsReady"/>.</summary>
+    private readonly TaskCompletionSource<bool> _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>Stops the init retry loop and the not-ready reminder on <see cref="CloseAsync"/>.</summary>
+    private readonly CancellationTokenSource _initLoopCts = new();
+
+    /// <summary>Started at construction: the "since start" clock for the init log contract.</summary>
+    private readonly System.Diagnostics.Stopwatch _initClock = System.Diagnostics.Stopwatch.StartNew();
+
+    /// <summary>1 once an init WARN/ERROR was logged, so the recovery line is logged at the same level.</summary>
+    private int _initFailureLogged;
+
+    /// <summary>The last init attempt's per-leg errors (<c>primary=host: error; secondary=host: error</c>).</summary>
+    private volatile string _lastInitErrors = string.Empty;
     private readonly object _stateLock = new();
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
@@ -323,37 +338,52 @@ public sealed class Quonfig : IQuonfig
     }
 
     /// <inheritdoc/>
-    public async Task InitAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// In delivery mode the background init loop owns the <see cref="QuonfigOptions.InitTimeout"/>
+    /// deadline (measured from construction) and applies <see cref="QuonfigOptions.OnInitFailure"/>:
+    /// <see cref="OnInitFailure.Fail"/> throws a <see cref="QuonfigInitException"/>,
+    /// <see cref="OnInitFailure.Continue"/> returns, <see cref="OnInitFailure.Wait"/> keeps blocking
+    /// until the first config arrives. <paramref name="cancellationToken"/> bounds the wait.
+    /// </remarks>
+    public Task InitAsync(CancellationToken cancellationToken = default) =>
+        AwaitWithCancellationAsync(_initTcs.Task, cancellationToken);
+
+    /// <summary>
+    /// True once the client holds a config from Quonfig (the first network install, or the datadir /
+    /// datafile load). Under <see cref="OnInitFailure.Wait"/>, wire a readiness probe to this so the
+    /// orchestrator holds traffic until config lands. Stays false while a client that hit
+    /// <see cref="OnInitFailure.Continue"/> (or a caught <see cref="OnInitFailure.Fail"/>) serves code
+    /// defaults, and flips to true when the background retry heals.
+    /// </summary>
+    public bool IsReady => _readyTcs.Task.IsCompleted;
+
+    /// <summary>
+    /// Completes when <see cref="IsReady"/> becomes true, whatever <see cref="OnInitFailure"/> is set
+    /// to; it never throws an init error. Pass a <paramref name="cancellationToken"/> to bound the wait.
+    /// </summary>
+    public Task WaitForReadyAsync(CancellationToken cancellationToken = default) =>
+        AwaitWithCancellationAsync(_readyTcs.Task, cancellationToken);
+
+    private static async Task AwaitWithCancellationAsync(Task task, CancellationToken cancellationToken)
     {
-        if (_initTcs.Task.IsCompleted)
+        if (task.IsCompleted || !cancellationToken.CanBeCanceled)
         {
-            await _initTcs.Task.ConfigureAwait(false);
+            await task.ConfigureAwait(false);
             return;
         }
-
-        var timeoutTask = Task.Delay(_opts.InitTimeout, cancellationToken);
-        var completed = await Task.WhenAny(_initTcs.Task, timeoutTask).ConfigureAwait(false);
-        if (completed == _initTcs.Task)
+        var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (cancellationToken.Register(() => cancelled.TrySetCanceled(cancellationToken)))
         {
-            await _initTcs.Task.ConfigureAwait(false);
-            return;
+            var first = await Task.WhenAny(task, cancelled.Task).ConfigureAwait(false);
+            await first.ConfigureAwait(false);
         }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (_opts.OnInitFailure == OnInitFailure.Throw)
-        {
-            throw new QuonfigInitTimeoutException(
-                FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}"));
-        }
-        // ReturnDefaults: surface no exception. Background init continues; getters return defaults
-        // until the first envelope arrives.
     }
 
     /// <inheritdoc/>
     public async Task CloseAsync()
     {
         if (Interlocked.Exchange(ref _closed, 1) != 0) return;
+        try { _initLoopCts.Cancel(); } catch (ObjectDisposedException) { }
         var watcher = _datadirWatcher;
         if (watcher is not null)
         {
@@ -398,6 +428,7 @@ public sealed class Quonfig : IQuonfig
             await reporter.DisposeAsync().ConfigureAwait(false);
         }
         _ownedTelemetrySender?.Dispose();
+        _initLoopCts.Dispose();
     }
 
     /// <inheritdoc/>
@@ -776,77 +807,338 @@ public sealed class Quonfig : IQuonfig
             _opts.FallbackPollThreshold);
     }
 
+    /// <summary>
+    /// The delivery-mode init loop (qfg-9p4i.10; spec 2026-10-05-init-failure-design.md B.3, C). Each
+    /// attempt is one hedged primary+secondary fetch; between attempts the loop waits with jittered
+    /// backoff (0.5s, 1s, 2s, ... capped at 30s). It owns the <see cref="QuonfigOptions.InitTimeout"/>
+    /// deadline (measured from construction) and applies <see cref="QuonfigOptions.OnInitFailure"/>:
+    /// fail raises at the deadline (or at once on 401/403 from every leg), continue returns, wait keeps
+    /// retrying until the first config lands. After fail/continue the update channel (SSE plus the
+    /// fallback poller) keeps retrying, so no client object is ever permanently dead.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Runs detached: any unexpected fault must settle InitAsync instead of leaving it hanging.")]
     private async Task RunHttpInitAsync()
     {
-        HttpTransport? transport = null;
-        // Scope initCts outside the try so the catch clauses can distinguish a real init
-        // timeout (initCts fired, or HttpClient.Timeout fired at the same per-request limit)
-        // from a fast-fail transport error. The race between initCts and the underlying
-        // HttpClient.Timeout — both set to _opts.InitTimeout — means either can win, and the
-        // resulting exception type varies (OperationCanceledException vs HttpTransport's
-        // QuonfigException wrap). Surface either as QuonfigInitTimeoutException so the
-        // cross-SDK initialization_timeout contract holds. (qfg-zp7i.15-followup)
-        using var initCts = new CancellationTokenSource(_opts.InitTimeout);
+        var mode = _opts.OnInitFailure;
         LogStartupMode();
+        var uris = _apiUrls.Select(u => new Uri(u, UriKind.Absolute)).ToList();
         try
         {
-            var uris = _apiUrls.Select(u => new Uri(u, UriKind.Absolute));
             // Per-URL config-fetch timeout (qfg-7h5d.1.11): a hung primary aborts after
             // ConfigFetchTimeout on the SEQUENTIAL FetchAsync path. The init/refresh install path
             // uses the parallel hedge (qfg-7h5d.1.14): fire the primary first and, only if it is slow
             // or errors, fire the secondary in parallel — bounded by HedgeDelay/HedgeAbort. The same
             // transport instance backs the fallback poller and in-band refresh, so every config-fetch
-            // path shares the per-leg ETag slots + the reject-older install guard.
-            transport = new HttpTransport(
+            // path shares the per-leg ETag slots + the reject-older install guard. Disposed by CloseAsync.
+            _httpTransport = new HttpTransport(
                 uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler,
                 _opts.ConfigFetchTimeout, _opts.ConfigFetchHedgeDelay, _opts.ConfigFetchHedgeAbort);
-            _httpTransport = transport;
-
-            // The per-leg hedge abort must be strictly below InitTimeout so an init-path heal leg is
-            // not clipped before it can land. Warn (not throw) so a tightened InitTimeout is still
-            // usable; the hedge just may not heal-forward within the initial budget. Mirrors sdk-go's
-            // construction-time WithConfigFetchHedgeAbort warning.
-            if (_opts.InitTimeout <= _opts.ConfigFetchHedgeAbort)
-            {
-                _logger.LogWarning(
-                    "quonfig: InitTimeout ({InitTimeout}) <= config-fetch hedge abort ({HedgeAbort}); init-path heal-forward may be clipped — raise InitTimeout above the hedge abort",
-                    _opts.InitTimeout, _opts.ConfigFetchHedgeAbort);
-            }
-
-            // Drive one hedged fetch+install cycle. Latches readiness on the FIRST successful install;
-            // a late-but-newer leg heals forward after. Throws when every fired leg failed (so the
-            // catch clauses below apply OnInitFailure); a non-empty 304/no-op cycle is a success.
-            await FetchAndInstallAsync(initial: true, initCts.Token).ConfigureAwait(false);
-            _initTcs.TrySetResult(true);
-            StartSse();
         }
-        catch (OperationCanceledException ex)
+        catch (Exception ex)
         {
-            HandleInitFailure(
-                new QuonfigInitTimeoutException(
-                    FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}"), ex));
+            _initTcs.TrySetException(new QuonfigInitException($"Quonfig client initialization failed: {ex.Message}", ex));
+            return;
         }
-        catch (Exception ex) when (ex is QuonfigException || ex is HttpRequestException || ex is JsonException)
+
+        // The per-leg hedge abort must be strictly below InitTimeout so an init-path heal leg is
+        // not clipped before it can land. Warn (not throw) so a tightened InitTimeout is still
+        // usable; the hedge just may not heal-forward within the initial budget. Mirrors sdk-go's
+        // construction-time WithConfigFetchHedgeAbort warning.
+        if (_opts.InitTimeout <= _opts.ConfigFetchHedgeAbort)
         {
-            // Two paths land here as "init timed out":
-            //   1. initCts.IsCancellationRequested: caller-CT fired before we caught the wrap.
-            //   2. HttpClient.Timeout fired inside SendAsync (per-URL timeout = _opts.InitTimeout),
-            //      surfacing a TaskCanceledException that HttpTransport.FetchAsync wraps in a
-            //      bare QuonfigException ("HTTP timeout contacting …") because the OCE's
-            //      cancellation token is the HttpClient's INTERNAL timeout-CTS, not initCts.
-            //      The inner-exception chain ends in an OperationCanceledException, which is
-            //      how we recognize it.
-            // Either way, the cross-SDK initialization_timeout contract requires
-            // QuonfigInitTimeoutException — not bare QuonfigException.
-            if (initCts.IsCancellationRequested || ChainContainsOperationCancelled(ex))
+            _logger.LogWarning(
+                "quonfig: InitTimeout ({InitTimeout}) <= config-fetch hedge abort ({HedgeAbort}); init-path heal-forward may be clipped — raise InitTimeout above the hedge abort",
+                _opts.InitTimeout, _opts.ConfigFetchHedgeAbort);
+        }
+
+        string timeoutText = FormatTimeout(_opts.InitTimeout);
+        LogInit(Microsoft.Extensions.Logging.LogLevel.Debug, InitEventStart, null, FormattableString.Invariant(
+            $"[quonfig] init: fetching config (initTimeout={timeoutText}, onInitFailure={ModeName(mode)})"));
+
+        var loopToken = _initLoopCts.Token;
+        using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(loopToken);
+        // Measured from construction, like the old InitAsync-side timer it replaces.
+        var remaining = _opts.InitTimeout - _initClock.Elapsed;
+        deadlineCts.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+
+        var random = new Random();
+        int attempt = 0;
+        bool timedOut = false;          // the InitTimeout deadline has passed (only wait keeps looping)
+        bool warnedFirst = false;
+        bool authLogged = false;
+        bool lastAttemptTimedOut = false;
+        Exception? lastError = null;
+        var nextProgress = TimeSpan.FromSeconds(5);
+        var nextWaitProgress = TimeSpan.Zero;
+
+        while (true)
+        {
+            if (loopToken.IsCancellationRequested)
             {
-                HandleInitFailure(
-                    new QuonfigInitTimeoutException(
-                        FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}"), ex));
+                SettleInitOnClose(mode);
                 return;
             }
-            HandleInitFailure(
-                new QuonfigException($"Quonfig client initialization failed: {ex.Message}", ex));
+            if (!timedOut && deadlineCts.IsCancellationRequested)
+            {
+                timedOut = true;
+                if (OnInitDeadline(mode, timeoutText, lastAttemptTimedOut || lastError is null, lastError))
+                {
+                    return;
+                }
+                nextWaitProgress = _initClock.Elapsed + TimeSpan.FromSeconds(30);
+            }
+
+            attempt++;
+            var failed = new List<LegResult>();
+            var token = timedOut ? loopToken : deadlineCts.Token;
+            try
+            {
+                // Drive one hedged fetch+install cycle. Latches readiness on the FIRST successful
+                // install; a late-but-newer leg heals forward after. Throws when every fired leg failed.
+                await FetchAndInstallAsync(initial: true, token, failed).ConfigureAwait(false);
+                _initTcs.TrySetResult(true);
+                StartSse();
+                return;
+            }
+            catch (OperationCanceledException ex)
+            {
+                if (loopToken.IsCancellationRequested)
+                {
+                    SettleInitOnClose(mode);
+                    return;
+                }
+                lastError = ex;
+                lastAttemptTimedOut = true; // the deadline cut the attempt mid-flight
+            }
+            catch (Exception ex)
+            {
+                if (loopToken.IsCancellationRequested)
+                {
+                    SettleInitOnClose(mode);
+                    return;
+                }
+                lastError = ex;
+                // An attempt the deadline cut short, or one whose legs all timed out, is a hang: the
+                // init-timeout class. Legs that answered with errors (refused, 5xx) are "unavailable".
+                lastAttemptTimedOut = (!timedOut && deadlineCts.IsCancellationRequested)
+                    || ChainContainsOperationCancelled(ex)
+                    || (failed.Count > 0 && failed.All(l => l.Status == 0 && ChainContainsOperationCancelled(l.Error)));
+            }
+
+            _lastInitErrors = FormatLegErrors(uris, failed, lastAttemptTimedOut);
+
+            // 401/403 from every configured leg: the key is rejected. fail raises now and continue
+            // continues now (B.3); wait logs ERROR and keeps retrying (the key may be provisioned late).
+            if (failed.Count >= uris.Count && failed.All(l => l.Status == 401 || l.Status == 403))
+            {
+                int status = failed.OrderBy(l => l.LegIndex).First().Status;
+                string by = uris.Count > 1 ? "primary and secondary" : "primary";
+                if (mode == OnInitFailure.Fail)
+                {
+                    LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventAuth, null, FormattableString.Invariant(
+                        $"[quonfig] init FAILED: SDK key rejected ({status}) by {by}. Check the key and environment. onInitFailure=fail: raising now."));
+                    HandleInitFailure(new QuonfigInitException(
+                        FormattableString.Invariant($"Quonfig client initialization failed: SDK key rejected ({status}) by {by}"),
+                        QuonfigInitFailureReason.Unauthorized, lastError));
+                    return;
+                }
+                if (mode == OnInitFailure.Continue)
+                {
+                    LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventAuth, null, FormattableString.Invariant(
+                        $"[quonfig] init: SDK key rejected ({status}) by {by}. Check the key and environment. onInitFailure=continue: STARTING ON CODE DEFAULTS. Retrying in background."));
+                    HandleInitFailure(null);
+                    return;
+                }
+                if (!authLogged)
+                {
+                    authLogged = true;
+                    LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventAuth, null, FormattableString.Invariant(
+                        $"[quonfig] init: SDK key rejected ({status}) by {by}. Check the key and environment. onInitFailure=wait: retrying (the key may be provisioned late)."));
+                }
+                warnedFirst = true;
+            }
+
+            if (!warnedFirst)
+            {
+                warnedFirst = true;
+                LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventRetrying, null,
+                    $"[quonfig] init: config not loaded yet, retrying until initTimeout ({timeoutText}). {_lastInitErrors}");
+            }
+
+            var elapsed = _initClock.Elapsed;
+            if (!timedOut && elapsed >= nextProgress && !deadlineCts.IsCancellationRequested)
+            {
+                LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventProgress, null, FormattableString.Invariant(
+                    $"[quonfig] init: still waiting for config ({elapsed.TotalSeconds:0.0}s elapsed of {timeoutText}, attempt {attempt}). {_lastInitErrors}"));
+                while (nextProgress <= elapsed) nextProgress += TimeSpan.FromSeconds(5);
+            }
+            else if (timedOut && elapsed >= nextWaitProgress)
+            {
+                LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventProgress, null, FormattableString.Invariant(
+                    $"[quonfig] init: still blocked waiting for config ({elapsed.TotalSeconds:0}s elapsed, attempt {attempt}). {_lastInitErrors}"));
+                while (nextWaitProgress <= elapsed) nextWaitProgress += TimeSpan.FromSeconds(30);
+            }
+
+            // Jittered backoff: 0.5s, 1s, 2s, 4s, ... capped at 30s, +/-20%. Before the deadline the
+            // sleep is cut short by it so the OnInitFailure decision lands on time.
+            double baseMs = Math.Min(30_000d, 500d * Math.Pow(2, Math.Min(attempt - 1, 16)));
+            var delay = TimeSpan.FromMilliseconds(baseMs * (0.8 + (0.4 * random.NextDouble())));
+            try
+            {
+                await Task.Delay(delay, timedOut ? loopToken : deadlineCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Deadline reached or client closed: the top of the loop decides.
+            }
+        }
+    }
+
+    private static readonly EventId InitEventStart = new(4100, "quonfig.init.start");
+    private static readonly EventId InitEventRetrying = new(4101, "quonfig.init.retrying");
+    private static readonly EventId InitEventProgress = new(4102, "quonfig.init.progress");
+    private static readonly EventId InitEventTimeout = new(4103, "quonfig.init.timeout");
+    private static readonly EventId InitEventAuth = new(4104, "quonfig.init.auth_failed");
+    private static readonly EventId InitEventNotConnected = new(4105, "quonfig.init.not_connected");
+    private static readonly EventId InitEventRecovered = new(4106, "quonfig.init.recovered");
+
+    /// <summary>Logs one init-contract line (section C). The <see cref="EventId"/> name is the structured <c>event</c>.</summary>
+    private void LogInit(Microsoft.Extensions.Logging.LogLevel level, EventId eventId, Exception? exception, string line)
+    {
+        if (level >= Microsoft.Extensions.Logging.LogLevel.Warning)
+        {
+            Volatile.Write(ref _initFailureLogged, 1);
+        }
+        _logger.Log(level, eventId, exception, "{QuonfigInitMessage}", line);
+    }
+
+    /// <summary>
+    /// Applies <see cref="QuonfigOptions.OnInitFailure"/> when the init deadline passes without a config.
+    /// Returns true when the loop is done (fail, continue); false for wait, which keeps retrying.
+    /// </summary>
+    private bool OnInitDeadline(OnInitFailure mode, string timeoutText, bool hung, Exception? lastError)
+    {
+        string errs = _lastInitErrors.Length > 0 ? _lastInitErrors : "no delivery leg answered";
+        string after = FormattableString.Invariant($"{_opts.InitTimeout.TotalSeconds:0.0}s");
+        if (mode == OnInitFailure.Wait)
+        {
+            LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventTimeout, null,
+                $"[quonfig] init: no config after {after}. onInitFailure=wait: still blocking startup and retrying indefinitely. {errs}. Use onInitFailure=fail or continue to bound startup.");
+            return false;
+        }
+        if (mode == OnInitFailure.Continue)
+        {
+            LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventTimeout, null,
+                $"[quonfig] init: no config after {after}. onInitFailure=continue: STARTING ON CODE DEFAULTS. This instance may disagree with the rest of your fleet. Retrying in background.");
+            HandleInitFailure(null);
+            return true;
+        }
+        string message = FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}");
+        QuonfigInitException error = hung
+            ? new QuonfigInitTimeoutException(message, lastError)
+            : new QuonfigInitException(
+                $"Quonfig client initialization failed: no config after {after}. {errs}",
+                QuonfigInitFailureReason.Unavailable,
+                lastError);
+        LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventTimeout, null,
+            $"[quonfig] init FAILED: no config after {after}. {errs}. onInitFailure=fail: raising {error.GetType().Name}. Options: onInitFailure=wait to keep waiting, onInitFailure=continue to start on code defaults, or raise initTimeout.");
+        HandleInitFailure(error);
+        return true;
+    }
+
+    /// <summary>The client was closed before init finished: settle InitAsync instead of leaving it hanging.</summary>
+    private void SettleInitOnClose(OnInitFailure mode)
+    {
+        if (mode == OnInitFailure.Continue)
+        {
+            _initTcs.TrySetResult(true);
+            return;
+        }
+        _initTcs.TrySetException(new QuonfigInitException(
+            "Quonfig client was closed before initialization completed", QuonfigInitFailureReason.Unavailable, null));
+    }
+
+    /// <summary>Canonical lower-case name of an <see cref="OnInitFailure"/> value (the deprecated aliases share these values).</summary>
+    private static string ModeName(OnInitFailure mode) => mode switch
+    {
+        OnInitFailure.Continue => "continue",
+        OnInitFailure.Wait => "wait",
+        _ => "fail",
+    };
+
+    /// <summary><c>10s</c>, <c>0.5s</c>: the init timeout as the log contract prints it.</summary>
+    private static string FormatTimeout(TimeSpan timeout) =>
+        timeout.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "s";
+
+    /// <summary><c>primary=host: error; secondary=host: error</c>. Hosts only, never the key or URL credentials.</summary>
+    private static string FormatLegErrors(IReadOnlyList<Uri> uris, List<LegResult> failed, bool hung)
+    {
+        if (failed.Count == 0)
+        {
+            return hung && uris.Count > 0 ? $"primary={uris[0].Authority}: timed out" : string.Empty;
+        }
+        return string.Join("; ", failed.OrderBy(l => l.LegIndex).Select(l =>
+        {
+            string name = l.LegIndex == 0 ? "primary" : l.LegIndex == 1 ? "secondary" : FormattableString.Invariant($"leg{l.LegIndex}");
+            string host = l.LegIndex >= 0 && l.LegIndex < uris.Count ? uris[l.LegIndex].Authority : "?";
+            return $"{name}={host}: {LegErrorText(l)}";
+        }));
+    }
+
+    private static string LegErrorText(LegResult leg)
+    {
+        if (leg.Status > 0) return FormattableString.Invariant($"HTTP {leg.Status}");
+        if (ChainContainsOperationCancelled(leg.Error)) return "timed out";
+        var inner = leg.Error?.InnerException;
+        return inner is HttpRequestException ? inner.Message : leg.Error?.Message ?? "unknown error";
+    }
+
+    /// <summary>
+    /// Heal line (section C): logged on the first network install, at Warning, only when an init
+    /// WARN/ERROR was logged first, so the filter level that saw the failure also sees the recovery.
+    /// </summary>
+    private void LogInitRecoveredIfFailed(int sourceIndex, string? version)
+    {
+        if (Volatile.Read(ref _initFailureLogged) == 0) return;
+        string via = sourceIndex switch
+        {
+            0 => "primary",
+            1 => "secondary",
+            < 0 => "stream",
+            _ => FormattableString.Invariant($"leg{sourceIndex}"),
+        };
+        _logger.Log(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventRecovered, null, "{QuonfigInitMessage}",
+            FormattableString.Invariant(
+                $"[quonfig] init recovered: config loaded after {_initClock.Elapsed.TotalSeconds:0.0}s via {via} (version {version ?? "unknown"}). Now serving live config."));
+    }
+
+    /// <summary>
+    /// While a client that continued (or a caught fail) is still not ready: WARN every 30s for 5
+    /// minutes, then every 5 minutes (section C), until the background retry heals or the client closes.
+    /// </summary>
+    private async Task RemindNotConnectedAsync()
+    {
+        var token = _initLoopCts.Token;
+        int reminders = 0;
+        try
+        {
+            while (!IsReady && !token.IsCancellationRequested)
+            {
+                var wait = reminders < 10 ? TimeSpan.FromSeconds(30) : TimeSpan.FromMinutes(5);
+                var finished = await Task.WhenAny(_readyTcs.Task, Task.Delay(wait, token)).ConfigureAwait(false);
+                if (finished == _readyTcs.Task || token.IsCancellationRequested) return;
+                reminders++;
+                var since = _initClock.Elapsed;
+                string sinceText = FormattableString.Invariant($"{(int)since.TotalMinutes}m{since.Seconds}s");
+                LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventNotConnected, null,
+                    $"[quonfig] still not connected to Quonfig delivery ({sinceText} since start); serving defaults. {_lastInitErrors}");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Closed.
         }
     }
 
@@ -876,7 +1168,8 @@ public sealed class Quonfig : IQuonfig
     /// 401 + secondary 503/timeout qualifies; primary 503 + secondary 401 does not). Only the
     /// fallback poller acts on it; init and <see cref="RefreshAsync"/> ignore it.</para>
     /// </summary>
-    private async Task<PollOutcome> FetchAndInstallAsync(bool initial, CancellationToken cancellationToken)
+    private async Task<PollOutcome> FetchAndInstallAsync(
+        bool initial, CancellationToken cancellationToken, List<LegResult>? failedLegs = null)
     {
         var transport = _httpTransport;
         if (transport is null) return PollOutcome.Failed;
@@ -902,6 +1195,7 @@ public sealed class Quonfig : IQuonfig
                 {
                     failures++;
                     lastError = leg.Error;
+                    failedLegs?.Add(leg);
                     continue;
                 }
                 // Any ANSWERED leg — 200-with-install, 304, or a guard-rejected older/same-
@@ -1007,35 +1301,26 @@ public sealed class Quonfig : IQuonfig
         return false;
     }
 
-    private void HandleInitFailure(QuonfigException error)
+    /// <summary>
+    /// Ends init without a config under fail (<paramref name="error"/> set: InitAsync raises it) or
+    /// continue (<paramref name="error"/> null: InitAsync returns). Either way the client keeps an empty
+    /// store (getters return their defaults or honor OnNoDefault) and keeps retrying through the update
+    /// channel (SSE plus the fallback poller), so a caller that catches the fail and keeps this object
+    /// still gets a client that heals (qfg-9p4i.3; no permanently dead clients).
+    /// </summary>
+    private void HandleInitFailure(QuonfigInitException? error)
     {
-        if (_opts.OnInitFailure == OnInitFailure.Throw)
-        {
-            // InitAsync surfaces the failure, but a caller that catches it and keeps this object
-            // must still get a client that heals (qfg-9p4i.3; no permanently dead clients). Keep
-            // the update channel alive exactly as ReturnDefaults does: SSE plus the fallback
-            // poller install the first envelope once delivery is reachable again.
-            InstallEmptyStoreIfNeeded();
-            _initTcs.TrySetException(error);
-            if (Volatile.Read(ref _closed) == 0 && !string.IsNullOrEmpty(_opts.SdkKey) && _streamUrls.Count > 0)
-            {
-                _logger.LogWarning(
-                    error,
-                    "quonfig: initial config fetch failed under OnInitFailure.Throw; InitAsync raises, and the client keeps retrying in the background in case the caller keeps it");
-            }
-            StartSse();
-            return;
-        }
-        // ReturnDefaults: complete init successfully; SSE supervisor will keep trying.
-        // Install an empty store so subsequent getters return FlagNotFound (and surface the
-        // OnNoDefault policy) rather than "client not yet initialized" — matches sdk-java's
-        // behavior under ReturnDefaults + OnNoDefault.Throw.
         InstallEmptyStoreIfNeeded();
-        _logger.LogWarning(
-            error,
-            "quonfig: initial config fetch failed under OnInitFailure.ReturnDefaults; serving defaults until SSE delivers an envelope");
-        _initTcs.TrySetResult(true);
+        if (error is null)
+        {
+            _initTcs.TrySetResult(true);
+        }
+        else
+        {
+            _initTcs.TrySetException(error);
+        }
         StartSse();
+        _ = Task.Run(RemindNotConnectedAsync);
     }
 
     private void InstallEmptyStoreIfNeeded()
@@ -1379,6 +1664,10 @@ public sealed class Quonfig : IQuonfig
             {
                 _resolvedFromIndex = sourceIndex;
             }
+            if (_networkInstallCount == 1)
+            {
+                LogInitRecoveredIfFailed(sourceIndex, envelope.Meta?.Version);
+            }
             return NetworkInstallOutcome.Installed;
         }
     }
@@ -1520,6 +1809,7 @@ public sealed class Quonfig : IQuonfig
         {
             _localLastRefresh = DateTimeOffset.UtcNow;
         }
+        _readyTcs.TrySetResult(true);
         FireConfigChange();
     }
 

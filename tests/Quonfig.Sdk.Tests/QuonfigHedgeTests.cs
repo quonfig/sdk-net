@@ -78,7 +78,7 @@ public sealed class QuonfigHedgeTests
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromSeconds(10),
-            OnInitFailure = OnInitFailure.ReturnDefaults,
+            OnInitFailure = OnInitFailure.Continue,
             OnNoDefault = OnNoDefault.Ignore,
             // Telemetry stays ENABLED (these tests drain client.Failover) but a no-op sender keeps it
             // off the network, and a far-out initial delay stops the reporter's background loop from

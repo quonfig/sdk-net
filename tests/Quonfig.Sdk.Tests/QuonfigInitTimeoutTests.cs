@@ -91,7 +91,7 @@ public sealed class QuonfigInitTimeoutTests
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
             InitTimeout = TimeSpan.FromMilliseconds(50),
-            OnInitFailure = OnInitFailure.Throw,
+            OnInitFailure = OnInitFailure.Fail,
             HttpMessageHandler = handler,
             // Init-timeout behavior, not telemetry; opt out so the now-live reporter (qfg-gxm6) does
             // not run against the timeout handler / default telemetry endpoint.

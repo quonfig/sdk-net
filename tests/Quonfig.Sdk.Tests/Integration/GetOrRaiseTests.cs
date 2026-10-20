@@ -6,6 +6,9 @@
 using System;
 using System.Threading.Tasks;
 using Quonfig.Sdk.Exceptions;
+using WireMock.RequestBuilders;
+using WireMock.ResponseBuilders;
+using WireMock.Server;
 using Xunit;
 
 namespace Quonfig.Sdk.Tests.Integration;
@@ -36,35 +39,151 @@ public sealed class GetOrRaiseTests
         Assert.Equal("DEFAULT", actual);
     }
 
-    [Fact(DisplayName = "get_or_raise raises the correct error if it doesn't raise on init timeout")]
-    public async Task GetOrRaiseRaisesTheCorrectErrorIfItDoesnTRaiseOnInitTimeout()
+    [Fact(DisplayName = "init fails by default when every delivery leg refuses the connection")]
+    public async Task InitFailsByDefaultWhenEveryDeliveryLegRefusesTheConnection()
     {
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
-            SdkKey = "integration-tests",
-            ApiUrls = new[] { "http://192.0.2.1:1" },
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(10),
-            OnInitFailure = OnInitFailure.ReturnDefaults,
+            InitTimeout = TimeSpan.FromMilliseconds(500),
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "init with on_init_failure fail raises when every delivery leg refuses the connection")]
+    public async Task InitWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(500),
+            OnInitFailure = OnInitFailure.Fail,
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "init with on_init_failure fail raises the init timeout when every delivery leg hangs")]
+    public async Task InitWithOnInitFailureFailRaisesTheInitTimeoutWhenEveryDeliveryLegHangs()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://192.0.2.1:1", "http://192.0.2.1:2" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(200),
+            OnInitFailure = OnInitFailure.Fail,
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.IsAssignableFrom<QuonfigInitTimeoutException>(raised);
+        Assert.True(stopwatch.ElapsedMilliseconds < 2000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "init with on_init_failure fail raises at once when every delivery leg answers 401")]
+    public async Task InitWithOnInitFailureFailRaisesAtOnceWhenEveryDeliveryLegAnswers401()
+    {
+        using var leg0 = WireMockServer.Start();
+        leg0.Given(Request.Create().UsingAnyMethod()).RespondWith(Response.Create().WithStatusCode(401));
+        using var leg1 = WireMockServer.Start();
+        leg1.Given(Request.Create().UsingAnyMethod()).RespondWith(Response.Create().WithStatusCode(401));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { leg0.Urls[0], leg1.Urls[0] },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(8000),
+            OnInitFailure = OnInitFailure.Fail,
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.False(raised is QuonfigInitTimeoutException, "reason unauthorized, not the init timeout");
+        Assert.True(stopwatch.ElapsedMilliseconds < 4000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "get_or_raise returns the default after init continues past refused delivery legs")]
+    public async Task GetOrRaiseReturnsTheDefaultAfterInitContinuesPastRefusedDeliveryLegs()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(500),
+            OnInitFailure = OnInitFailure.Continue,
+        });
+        await client.InitAsync();
+        var actual = client.GetString("any-key", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "get_or_raise raises missing_default after init continues past refused delivery legs")]
+    public async Task GetOrRaiseRaisesMissingDefaultAfterInitContinuesPastRefusedDeliveryLegs()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(500),
+            OnInitFailure = OnInitFailure.Continue,
         });
         await client.InitAsync();
         Assert.Throws<QuonfigKeyNotFoundException>(() => client.GetString("any-key"));
     }
 
-    [Fact(DisplayName = "get_or_raise can raise an error if the client does not initialize in time")]
-    public async Task GetOrRaiseCanRaiseAnErrorIfTheClientDoesNotInitializeInTime()
+    [Fact(DisplayName = "deprecated on_init_failure raise behaves as fail when every delivery leg refuses the connection")]
+    public async Task DeprecatedOnInitFailureRaiseBehavesAsFailWhenEveryDeliveryLegRefusesTheConnection()
     {
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
-            SdkKey = "integration-tests",
-            ApiUrls = new[] { "http://192.0.2.1:1" },
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(10),
+            InitTimeout = TimeSpan.FromMilliseconds(500),
             OnInitFailure = OnInitFailure.Throw,
         });
-        await Assert.ThrowsAsync<QuonfigInitTimeoutException>(() => client.InitAsync());
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "deprecated on_init_failure return behaves as continue when every delivery leg refuses the connection")]
+    public async Task DeprecatedOnInitFailureReturnBehavesAsContinueWhenEveryDeliveryLegRefusesTheConnection()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(500),
+            OnInitFailure = OnInitFailure.ReturnDefaults,
+        });
+        await client.InitAsync();
+        Assert.Throws<QuonfigKeyNotFoundException>(() => client.GetString("any-key"));
     }
 
     [Fact(DisplayName = "raises an error if a config is provided by a missing environment variable")]
