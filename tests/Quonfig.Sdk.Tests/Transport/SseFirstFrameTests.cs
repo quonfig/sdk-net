@@ -196,13 +196,22 @@ public sealed class SseFirstFrameTests
     [Fact]
     public async Task Test9d_EnvelopeThenHold_Control()
     {
+        // The SDK starts the stream as soon as the init fetch installs, so an envelope sent right
+        // away can install v2 before StartAsync reads the v1 the init fetch served. Hold the
+        // envelope until that read is done.
+        var sendEnvelope = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var server = new FrameServer(async (_, s, ct) =>
         {
             await FrameServer.WriteSseHeadersAsync(s, ct);
+            using (ct.Register(() => sendEnvelope.TrySetCanceled()))
+            {
+                await sendEnvelope.Task;
+            }
             await FrameServer.WriteAsync(s, "data: " + Envelope(2, "v2") + "\n\n", ct);
             await Task.Delay(Timeout.Infinite, ct);
         });
         await using var rig = await ClientRig.StartAsync(server, threshold: TimeSpan.FromSeconds(10));
+        sendEnvelope.SetResult(true);
 
         bool got = await WaitForAsync(() => rig.Client.GetString(Key) == "v2", TimeSpan.FromSeconds(3));
         await Task.Delay(200);
