@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed (patch): a client that survives a caught `OnInitFailure.Throw` now keeps retrying and heals (qfg-9p4i.3).** When the initial config fetch failed under `Throw` (the default), `InitAsync()` raised and the client never started its update channel, so a caller that caught the exception and kept the object served code defaults forever. Only `ReturnDefaults` started SSE and the fallback poller. Now `Throw` starts them too: `InitAsync()` still raises exactly as before, and the kept client installs the first envelope once delivery is reachable, then stays live. A Warning is logged when the background retry starts. Discarding the client after the exception, as before, is unaffected.
+
 ## 1.8.1 - 2026-10-20
 
 - **Fixed (patch): `System.Collections.Immutable` dependency floor lowered back to 8.0.0.** 1.7.0 and 1.8.0 declared `System.Collections.Immutable >= 10.0.12` (an unintended Dependabot bump), which forced every consumer onto the 10.x package. The SDK only needs 8.0.0, in line with its other `System.*` and `Microsoft.Extensions.*` dependencies; consumers that already resolved 10.x keep working.
