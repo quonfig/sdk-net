@@ -96,7 +96,9 @@ jobs:
           # NS2.0 build of Quonfig.Sdk under .NET Framework 4.8 on windows-latest, and under the
           # net8.0 host on ubuntu-latest.
           #
-          # Windows: skip the three generated fail-mode "refuses the connection" cases. Windows
+          # Windows: skip the generated fail-mode "refuses the connection" cases (three, plus the
+          # v2026.10.21 "init error never carries the userinfo of a delivery URL" case, which uses the
+          # same refused 127.0.0.1 legs with a 500ms InitTimeout). Windows
           # retries a TCP connect that gets RST (~2s to 127.0.0.1:<closed>), longer than those
           # cases' 500ms InitTimeout, so the attempt is still in flight at the deadline and is
           # correctly classified as a hang (QuonfigInitTimeoutException), not "unavailable". The
@@ -104,7 +106,7 @@ jobs:
           # Linux, where a refused connect fails at once. (qfg-9p4i.17.5)
           FILTER=()
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            FILTER=(--filter "FullyQualifiedName!~InitFailsByDefaultWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~InitWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~DeprecatedOnInitFailureRaiseBehavesAsFailWhenEveryDeliveryLegRefusesTheConnection")
+            FILTER=(--filter "FullyQualifiedName!~InitFailsByDefaultWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~InitWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~DeprecatedOnInitFailureRaiseBehavesAsFailWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~InitErrorNeverCarriesTheUserinfoOfADeliveryUrl")
           fi
           dotnet test tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
             --configuration Release \
