@@ -44,7 +44,7 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          ref: v2026.10.21
+          ref: ecf0e06d71e73b9401dce7ca3dab269f6ef67da9  # itd/init-timing-cross-platform (preflight)
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4

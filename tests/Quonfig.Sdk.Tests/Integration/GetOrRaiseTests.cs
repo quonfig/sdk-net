@@ -48,34 +48,14 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(500),
+            InitTimeout = TimeSpan.FromMilliseconds(0),
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
-    }
-
-    [Fact(DisplayName = "init with on_init_failure fail raises when every delivery leg refuses the connection")]
-    public async Task InitWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection()
-    {
-        await using var client = TestSetup.NewClient(new QuonfigOptions
-        {
-            SdkKey = "itd-init-failure",
-            ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
-            StreamUrls = Array.Empty<string>(),
-            FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(500),
-            OnInitFailure = OnInitFailure.Fail,
-        });
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
-        stopwatch.Stop();
-        Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
-        Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 8000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
     [Fact(DisplayName = "init with on_init_failure fail raises the init timeout when every delivery leg hangs")]
@@ -164,7 +144,7 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { "http://127.0.0.1:1", "http://127.0.0.1:2" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(500),
+            InitTimeout = TimeSpan.FromMilliseconds(0),
             OnInitFailure = OnInitFailure.Throw,
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -172,7 +152,7 @@ public sealed class GetOrRaiseTests
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 8000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
     [Fact(DisplayName = "deprecated on_init_failure return behaves as continue when every delivery leg refuses the connection")]
@@ -239,8 +219,8 @@ public sealed class GetOrRaiseTests
         Assert.True(stopwatch.ElapsedMilliseconds < 4000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
-    [Fact(DisplayName = "init with on_init_failure fail raises unavailable when only the primary answers 401 and the secondary 503")]
-    public async Task InitWithOnInitFailureFailRaisesUnavailableWhenOnlyThePrimaryAnswers401AndTheSecondary503()
+    [Fact(DisplayName = "init with on_init_failure fail raises unavailable after one attempt when only the primary answers 401 and the secondary 503")]
+    public async Task InitWithOnInitFailureFailRaisesUnavailableAfterOneAttemptWhenOnlyThePrimaryAnswers401AndTheSecondary503()
     {
         using var leg0 = WireMockServer.Start();
         leg0.Given(Request.Create().UsingAnyMethod()).RespondWith(Response.Create().WithStatusCode(401));
@@ -252,7 +232,7 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { leg0.Urls[0], leg1.Urls[0] },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(1500),
+            InitTimeout = TimeSpan.FromMilliseconds(0),
             OnInitFailure = OnInitFailure.Fail,
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -260,7 +240,29 @@ public sealed class GetOrRaiseTests
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 6000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+    }
+
+    [Fact(DisplayName = "init with on_init_failure fail raises unavailable at the deadline when the primary answers 401 and the secondary hangs")]
+    public async Task InitWithOnInitFailureFailRaisesUnavailableAtTheDeadlineWhenThePrimaryAnswers401AndTheSecondaryHangs()
+    {
+        using var leg0 = WireMockServer.Start();
+        leg0.Given(Request.Create().UsingAnyMethod()).RespondWith(Response.Create().WithStatusCode(401));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            SdkKey = "itd-init-failure",
+            ApiUrls = new[] { leg0.Urls[0], "http://192.0.2.1:8002" },
+            StreamUrls = Array.Empty<string>(),
+            FallbackPollEnabled = false,
+            InitTimeout = TimeSpan.FromMilliseconds(10000),
+            OnInitFailure = OnInitFailure.Fail,
+        });
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        stopwatch.Stop();
+        Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
+        Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
+        Assert.True(stopwatch.ElapsedMilliseconds < 13000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
     [Fact(DisplayName = "init with init_timeout_ms 0 and on_init_failure fail raises after one attempt when every delivery leg refuses the connection")]
@@ -280,7 +282,7 @@ public sealed class GetOrRaiseTests
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 8000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
     [Fact(DisplayName = "get_or_raise returns the default after init with init_timeout_ms 0 continues past refused delivery legs")]
@@ -329,7 +331,7 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { "http://qfguser:qfgsecret@127.0.0.1:1", "http://qfguser:qfgsecret@127.0.0.1:2" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(500),
+            InitTimeout = TimeSpan.FromMilliseconds(0),
             OnInitFailure = OnInitFailure.Fail,
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -337,7 +339,7 @@ public sealed class GetOrRaiseTests
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 5000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 8000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
         for (Exception? e = raised; e != null; e = e.InnerException)
         {
             Assert.DoesNotContain("qfgsecret", e.Message, StringComparison.Ordinal);
@@ -358,7 +360,7 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { leg0.Urls[0], leg1.Urls[0] },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(500),
+            InitTimeout = TimeSpan.FromMilliseconds(0),
             OnInitFailure = OnInitFailure.Fail,
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
