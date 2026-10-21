@@ -27,7 +27,7 @@ jobs:
           # Pinned to a tag (not main) so a typo in shared YAML can't
           # break every SDK's CI at once. Bump to a newer tag when
           # adopting new test cases. See integration-test-data/RELEASING.md.
-          ref: v2026.10.21
+          ref: v2026.10.21.1
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4
@@ -96,23 +96,10 @@ jobs:
           # NS2.0 build of Quonfig.Sdk under .NET Framework 4.8 on windows-latest, and under the
           # net8.0 host on ubuntu-latest.
           #
-          # Windows: skip the generated fail-mode "refuses the connection" cases (three, plus the
-          # v2026.10.21 "init error never carries the userinfo of a delivery URL" case, which uses the
-          # same refused 127.0.0.1 legs with a 500ms InitTimeout). Windows
-          # retries a TCP connect that gets RST (~2s to 127.0.0.1:<closed>), longer than those
-          # cases' 500ms InitTimeout, so the attempt is still in flight at the deadline and is
-          # correctly classified as a hang (QuonfigInitTimeoutException), not "unavailable". The
-          # cases are generated from integration-test-data (cannot be edited here) and still run on
-          # Linux, where a refused connect fails at once. (qfg-9p4i.17.5)
-          FILTER=()
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            FILTER=(--filter "FullyQualifiedName!~InitFailsByDefaultWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~InitWithOnInitFailureFailRaisesWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~DeprecatedOnInitFailureRaiseBehavesAsFailWhenEveryDeliveryLegRefusesTheConnection&FullyQualifiedName!~InitErrorNeverCarriesTheUserinfoOfADeliveryUrl")
-          fi
           dotnet test tests/Quonfig.Sdk.Tests/Quonfig.Sdk.Tests.csproj \
             --configuration Release \
             --framework "$TEST_HOST_TFM" \
             --no-build \
-            "${FILTER[@]}" \
             --logger "trx;LogFileName=test-results-${{ matrix.os }}-${{ matrix.tfm }}.trx"
 
       - name: Test companion packages (AspNetCore, Extensions.Logging, Serilog)
