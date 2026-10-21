@@ -121,7 +121,19 @@ public sealed class QuonfigOptions
     /// <summary>Debounce window when <see cref="DatadirAutoReload"/> is on. Defaults to 200ms.</summary>
     public TimeSpan DatadirAutoReloadDebounce { get; set; } = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>How long the initial load may take before the <see cref="OnInitFailure"/> policy applies. Defaults to 10s.</summary>
+    /// <summary>
+    /// How long the initial load may take before the <see cref="OnInitFailure"/> policy applies.
+    /// Defaults to 10s. Measured from construction.
+    ///
+    /// <para>Zero or negative (including <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>) means
+    /// "try once": the client runs exactly ONE fetch attempt (bounded by the per-leg
+    /// <see cref="ConfigFetchHedgeAbort"/>), then applies <see cref="OnInitFailure"/> at once:
+    /// <see cref="Sdk.OnInitFailure.Fail"/> throws, <see cref="Sdk.OnInitFailure.Continue"/> starts on
+    /// code defaults, <see cref="Sdk.OnInitFailure.Wait"/> keeps retrying. It never means "no deadline".</para>
+    ///
+    /// <para>This is only the init budget: it does not bound individual HTTP requests, so a small value
+    /// does not cap later fetches (fallback poller, <c>RefreshAsync</c>, wait-mode retries).</para>
+    /// </summary>
     public TimeSpan InitTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>

@@ -812,7 +812,7 @@ public sealed class Quonfig : IQuonfig
     /// attempt is one hedged primary+secondary fetch; between attempts the loop waits with jittered
     /// backoff (0.5s, 1s, 2s, ... capped at 30s). It owns the <see cref="QuonfigOptions.InitTimeout"/>
     /// deadline (measured from construction) and applies <see cref="QuonfigOptions.OnInitFailure"/>:
-    /// fail raises at the deadline (or at once on 401/403 from every leg), continue returns, wait keeps
+    /// fail raises at the deadline (or at once on 401/403/404/410 from every configured leg), continue returns, wait keeps
     /// retrying until the first config lands. After fail/continue the update channel (SSE plus the
     /// fallback poller) keeps retrying, so no client object is ever permanently dead.
     /// </summary>
@@ -832,8 +832,13 @@ public sealed class Quonfig : IQuonfig
             // or errors, fire the secondary in parallel — bounded by HedgeDelay/HedgeAbort. The same
             // transport instance backs the fallback poller and in-band refresh, so every config-fetch
             // path shares the per-leg ETag slots + the reject-older install guard. Disposed by CloseAsync.
+            //
+            // The shared HttpClient's own Timeout is only a ceiling above the per-leg deadlines: it must
+            // NOT come from InitTimeout, which would (a) throw for InitTimeout <= 0 and (b) cap every
+            // later fetch (wait-mode retries, the fallback poller, RefreshAsync) at the init budget
+            // forever (qfg-9p4i.17.5, D3).
             _httpTransport = new HttpTransport(
-                uris, _opts.SdkKey!, _opts.InitTimeout, _opts.HttpMessageHandler,
+                uris, _opts.SdkKey!, TransportCeiling(_opts), _opts.HttpMessageHandler,
                 _opts.ConfigFetchTimeout, _opts.ConfigFetchHedgeDelay, _opts.ConfigFetchHedgeAbort);
         }
         catch (Exception ex)
@@ -846,7 +851,11 @@ public sealed class Quonfig : IQuonfig
         // not clipped before it can land. Warn (not throw) so a tightened InitTimeout is still
         // usable; the hedge just may not heal-forward within the initial budget. Mirrors sdk-go's
         // construction-time WithConfigFetchHedgeAbort warning.
-        if (_opts.InitTimeout <= _opts.ConfigFetchHedgeAbort)
+        // D3 (qfg-9p4i.17.5): InitTimeout <= 0 (including InfiniteTimeSpan) means exactly ONE attempt,
+        // bounded by the per-leg deadlines, then OnInitFailure applies. Never "no deadline", never a
+        // decision before any attempt.
+        bool singleAttempt = _opts.InitTimeout <= TimeSpan.Zero;
+        if (!singleAttempt && _opts.InitTimeout <= _opts.ConfigFetchHedgeAbort)
         {
             _logger.LogWarning(
                 "quonfig: InitTimeout ({InitTimeout}) <= config-fetch hedge abort ({HedgeAbort}); init-path heal-forward may be clipped — raise InitTimeout above the hedge abort",
@@ -860,8 +869,11 @@ public sealed class Quonfig : IQuonfig
         var loopToken = _initLoopCts.Token;
         using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(loopToken);
         // Measured from construction, like the old InitAsync-side timer it replaces.
-        var remaining = _opts.InitTimeout - _initClock.Elapsed;
-        deadlineCts.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+        if (!singleAttempt)
+        {
+            var remaining = _opts.InitTimeout - _initClock.Elapsed;
+            deadlineCts.CancelAfter(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+        }
 
         var random = new Random();
         int attempt = 0;
@@ -880,10 +892,11 @@ public sealed class Quonfig : IQuonfig
                 SettleInitOnClose(mode);
                 return;
             }
-            if (!timedOut && deadlineCts.IsCancellationRequested)
+            if (!timedOut && (deadlineCts.IsCancellationRequested || (singleAttempt && attempt >= 1)))
             {
                 timedOut = true;
-                if (OnInitDeadline(mode, timeoutText, lastAttemptTimedOut || lastError is null, lastError))
+                // D2: timeout iff the LAST attempt hung, or no attempt completed.
+                if (OnInitDeadline(mode, timeoutText, lastAttemptTimedOut || attempt == 0, lastError))
                 {
                     return;
                 }
@@ -910,7 +923,9 @@ public sealed class Quonfig : IQuonfig
                     return;
                 }
                 lastError = ex;
-                lastAttemptTimedOut = true; // the deadline cut the attempt mid-flight
+                // The deadline cut the attempt mid-flight: the legs still in flight hung. It is a hang
+                // unless a leg that already settled answered with a fast error (D2).
+                lastAttemptTimedOut = failed.All(IsTimedOutLeg);
             }
             catch (Exception ex)
             {
@@ -920,21 +935,28 @@ public sealed class Quonfig : IQuonfig
                     return;
                 }
                 lastError = ex;
-                // An attempt the deadline cut short, or one whose legs all timed out, is a hang: the
-                // init-timeout class. Legs that answered with errors (refused, 5xx) are "unavailable".
-                lastAttemptTimedOut = (!timedOut && deadlineCts.IsCancellationRequested)
-                    || ChainContainsOperationCancelled(ex)
-                    || (failed.Count > 0 && failed.All(l => l.Status == 0 && ChainContainsOperationCancelled(l.Error)));
+                // D2: the attempt hung only when EVERY leg in it ended on a timeout/abort. Legs that
+                // answered with errors (refused, 5xx, bad body) make it "unavailable".
+                lastAttemptTimedOut = failed.Count > 0
+                    ? failed.All(IsTimedOutLeg)
+                    : (!timedOut && deadlineCts.IsCancellationRequested) || ChainContainsOperationCancelled(ex);
             }
 
             _lastInitErrors = FormatLegErrors(uris, failed, lastAttemptTimedOut);
 
-            // 401/403 from every configured leg: the key is rejected. fail raises now and continue
+            // An auth-class status from every configured leg: the key is rejected. fail raises now and continue
             // continues now (B.3); wait logs ERROR and keeps retrying (the key may be provisioned late).
-            if (failed.Count >= uris.Count && failed.All(l => l.Status == 401 || l.Status == 403))
+            // D1: auth class {401, 403, 404, 410} from EVERY configured leg (never the primary alone).
+            if (failed.Select(l => l.LegIndex).Distinct().Count() >= uris.Count
+                && failed.All(l => HttpTransport.IsAuthClassStatus(l.Status)))
             {
                 int status = failed.OrderBy(l => l.LegIndex).First().Status;
-                string by = uris.Count > 1 ? "primary and secondary" : "primary";
+                string by = uris.Count switch
+                {
+                    1 => "primary",
+                    2 => "primary and secondary",
+                    _ => FormattableString.Invariant($"all {uris.Count} delivery URLs"),
+                };
                 if (mode == OnInitFailure.Fail)
                 {
                     LogInit(Microsoft.Extensions.Logging.LogLevel.Error, InitEventAuth, null, FormattableString.Invariant(
@@ -960,6 +982,10 @@ public sealed class Quonfig : IQuonfig
                 warnedFirst = true;
             }
 
+            if (singleAttempt)
+            {
+                warnedFirst = true; // D3: no "retrying until initTimeout" line; the decision line carries <errs>.
+            }
             if (!warnedFirst)
             {
                 warnedFirst = true;
@@ -979,6 +1005,11 @@ public sealed class Quonfig : IQuonfig
                 LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventProgress, null, FormattableString.Invariant(
                     $"[quonfig] init: still blocked waiting for config ({elapsed.TotalSeconds:0}s elapsed, attempt {attempt}). {_lastInitErrors}"));
                 while (nextWaitProgress <= elapsed) nextWaitProgress += TimeSpan.FromSeconds(30);
+            }
+
+            if (singleAttempt && !timedOut)
+            {
+                continue; // D3: the one attempt is done; the top of the loop applies OnInitFailure now.
             }
 
             // Jittered backoff: 0.5s, 1s, 2s, 4s, ... capped at 30s, +/-20%. Before the deadline the
@@ -1021,7 +1052,9 @@ public sealed class Quonfig : IQuonfig
     private bool OnInitDeadline(OnInitFailure mode, string timeoutText, bool hung, Exception? lastError)
     {
         string errs = _lastInitErrors.Length > 0 ? _lastInitErrors : "no delivery leg answered";
-        string after = FormattableString.Invariant($"{_opts.InitTimeout.TotalSeconds:0.0}s");
+        string after = _opts.InitTimeout <= TimeSpan.Zero
+            ? "one attempt (initTimeout <= 0)"
+            : FormattableString.Invariant($"{_opts.InitTimeout.TotalSeconds:0.0}s");
         if (mode == OnInitFailure.Wait)
         {
             LogInit(Microsoft.Extensions.Logging.LogLevel.Warning, InitEventTimeout, null,
@@ -1035,9 +1068,8 @@ public sealed class Quonfig : IQuonfig
             HandleInitFailure(null);
             return true;
         }
-        string message = FormattableString.Invariant($"Quonfig client initialization exceeded {_opts.InitTimeout}");
         QuonfigInitException error = hung
-            ? new QuonfigInitTimeoutException(message, lastError)
+            ? new QuonfigInitTimeoutException($"Quonfig client initialization timed out: no config after {after}. {errs}", lastError)
             : new QuonfigInitException(
                 $"Quonfig client initialization failed: no config after {after}. {errs}",
                 QuonfigInitFailureReason.Unavailable,
@@ -1060,6 +1092,22 @@ public sealed class Quonfig : IQuonfig
             "Quonfig client was closed before initialization completed", QuonfigInitFailureReason.Unavailable, null));
     }
 
+    /// <summary>A failed leg that ended on a timeout/abort rather than an answer or a fast error.</summary>
+    private static bool IsTimedOutLeg(LegResult leg) => leg.Status == 0 && ChainContainsOperationCancelled(leg.Error);
+
+    /// <summary>
+    /// The shared transport's HttpClient.Timeout: a ceiling ABOVE the per-leg deadlines
+    /// (<see cref="QuonfigOptions.ConfigFetchTimeout"/>, <see cref="QuonfigOptions.ConfigFetchHedgeAbort"/>),
+    /// which are what actually bound each request. Independent of <see cref="QuonfigOptions.InitTimeout"/>.
+    /// </summary>
+    private static TimeSpan TransportCeiling(QuonfigOptions opts)
+    {
+        var ceiling = HttpTransport.DefaultHttpTimeout;
+        if (opts.ConfigFetchTimeout > ceiling) ceiling = opts.ConfigFetchTimeout;
+        if (opts.ConfigFetchHedgeAbort > ceiling) ceiling = opts.ConfigFetchHedgeAbort;
+        return ceiling;
+    }
+
     /// <summary>Canonical lower-case name of an <see cref="OnInitFailure"/> value (the deprecated aliases share these values).</summary>
     private static string ModeName(OnInitFailure mode) => mode switch
     {
@@ -1069,8 +1117,9 @@ public sealed class Quonfig : IQuonfig
     };
 
     /// <summary><c>10s</c>, <c>0.5s</c>: the init timeout as the log contract prints it.</summary>
-    private static string FormatTimeout(TimeSpan timeout) =>
-        timeout.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "s";
+    private static string FormatTimeout(TimeSpan timeout) => timeout <= TimeSpan.Zero
+        ? "0s"
+        : timeout.TotalSeconds.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture) + "s";
 
     /// <summary><c>primary=host: error; secondary=host: error</c>. Hosts only, never the key or URL credentials.</summary>
     private static string FormatLegErrors(IReadOnlyList<Uri> uris, List<LegResult> failed, bool hung)
@@ -1179,80 +1228,12 @@ public sealed class Quonfig : IQuonfig
         bool installedOnce = false;
         int fired = 0;
         int failures = 0;
+        int authFailures = 0;
         int primaryStatus = 0;
         Exception? lastError = null;
+        var firedLegs = new HashSet<int>();
 
-        while (await reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            while (reader.TryRead(out var leg))
-            {
-                fired++;
-                if (leg.LegIndex == 0)
-                {
-                    primaryStatus = leg.Status;
-                }
-                if (leg.Error is not null)
-                {
-                    failures++;
-                    lastError = leg.Error;
-                    failedLegs?.Add(leg);
-                    continue;
-                }
-                // Any ANSWERED leg — 200-with-install, 304, or a guard-rejected older/same-
-                // generation payload — is a successful poll of the delivery tier: the server
-                // responded; there may simply have been nothing newer to install. Stamp
-                // LastSuccessfulRefresh per answered leg so freshness reports "config is
-                // reachable" (sdk-go post-qfg-41nh.11 semantics). The SSE path is stricter: a
-                // PUSHED envelope that fails the reject-older guard does NOT stamp (see
-                // OnSseEnvelope) — counting stale replays would report a frozen client as fresh.
-                _supervisor?.RecordSuccessfulRefresh();
-                if (leg.NotModified || leg.Envelope is null)
-                {
-                    continue; // 304 — nothing changed on this leg.
-                }
-                // Reject-older guard + install are atomic under _installLock against every other
-                // install path (SSE, fallback poller). InstallFromNetwork sets the held generation,
-                // install count, and resolved-from leg together (resolvedFrom set atomically with held).
-                var outcome = InstallFromNetwork(leg.Envelope, leg.LegIndex);
-                if (outcome == NetworkInstallOutcome.Installed)
-                {
-                    // Failover observability: record which leg (primary index 0 / secondary index
-                    // > 0) served the config now held (qfg-41nh.18).
-                    _failover?.RecordResolvedFrom(leg.LegIndex);
-                    if (!installedOnce)
-                    {
-                        installedOnce = true;
-                        if (initial)
-                        {
-                            // Latch readiness on the FIRST successful install; keep draining so a
-                            // late-but-newer leg heals forward before this call returns.
-                            _initTcs.TrySetResult(true);
-                        }
-                    }
-                }
-                else if (outcome == NetworkInstallOutcome.RejectedOlder)
-                {
-                    // A 200 dropped by the reject-older guard because it was STRICTLY older than the
-                    // held generation: a leg tried to move this client backwards. That is the failover
-                    // signal worth alerting on, so count it (qfg-41nh.18, narrowed by qfg-rr5b). The
-                    // fetch itself succeeded (liveness already stamped above) — only the install was a
-                    // no-op.
-                    _failover?.RecordGuardRejected();
-                }
-                // NetworkInstallOutcome.RejectedSameGeneration: the server answered with the config we
-                // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the
-                // fallback poller's engage-time fetch). Nothing to install and nothing wrong — a silent
-                // no-op, deliberately NOT counted as guardRejected (qfg-rr5b).
-                else if (outcome == NetworkInstallOutcome.RejectedUnversioned)
-                {
-                    // A gen<=0 payload while a real generation is held — not installed, but not
-                    // provably older, so a silent no-op (qfg-9dxb.9). Forget its ETag: the server can
-                    // repair the generation for the SAME sha, and a remembered ETag would 304 the
-                    // repaired payload until the next commit (qfg-9dxb.9 follow-up).
-                    transport.ForgetETag(leg.LegIndex, leg.ETag);
-                }
-            }
-        }
+        await DrainAsync(reader).ConfigureAwait(false);
 
         // Failover observability: if more than the primary leg fired, the hedge fired its secondary
         // leg this cycle (the primary was slow or errored). Recorded once per cycle regardless of
@@ -1260,6 +1241,16 @@ public sealed class Quonfig : IQuonfig
         if (fired > 1)
         {
             _failover?.RecordHedgeFired();
+        }
+
+        // D1 (qfg-9p4i.17.5): the init auth fast-fail needs an auth-class answer from EVERY configured
+        // leg, but the hedge only ever fires the primary and the secondary. When every fired leg was
+        // auth-rejected and more legs are configured, ask the rest before deciding (and install from
+        // any of them that answers), so the rule is reachable with 3+ URLs.
+        if (initial && !installedOnce && fired > 0 && authFailures == fired && firedLegs.Count < transport.ApiUrls.Count)
+        {
+            var rest = Enumerable.Range(0, transport.ApiUrls.Count).Where(i => !firedLegs.Contains(i)).ToList();
+            await DrainAsync(transport.FetchLegsAsync(rest, cancellationToken)).ConfigureAwait(false);
         }
 
         if (installedOnce)
@@ -1282,6 +1273,83 @@ public sealed class Quonfig : IQuonfig
         }
         // initial with an all-304 / empty cycle, or a non-initial refresh: a no-op success.
         return PollOutcome.Ok;
+
+        async Task DrainAsync(System.Threading.Channels.ChannelReader<LegResult> legs)
+        {
+            while (await legs.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                while (legs.TryRead(out var leg))
+                {
+                    fired++;
+                    firedLegs.Add(leg.LegIndex);
+                    if (leg.LegIndex == 0)
+                    {
+                        primaryStatus = leg.Status;
+                    }
+                    if (leg.Error is not null)
+                    {
+                        failures++;
+                        if (HttpTransport.IsAuthClassStatus(leg.Status)) authFailures++;
+                        lastError = leg.Error;
+                        failedLegs?.Add(leg);
+                        continue;
+                    }
+                    // Any ANSWERED leg — 200-with-install, 304, or a guard-rejected older/same-
+                    // generation payload — is a successful poll of the delivery tier: the server
+                    // responded; there may simply have been nothing newer to install. Stamp
+                    // LastSuccessfulRefresh per answered leg so freshness reports "config is
+                    // reachable" (sdk-go post-qfg-41nh.11 semantics). The SSE path is stricter: a
+                    // PUSHED envelope that fails the reject-older guard does NOT stamp (see
+                    // OnSseEnvelope) — counting stale replays would report a frozen client as fresh.
+                    _supervisor?.RecordSuccessfulRefresh();
+                    if (leg.NotModified || leg.Envelope is null)
+                    {
+                        continue; // 304 — nothing changed on this leg.
+                    }
+                    // Reject-older guard + install are atomic under _installLock against every other
+                    // install path (SSE, fallback poller). InstallFromNetwork sets the held generation,
+                    // install count, and resolved-from leg together (resolvedFrom set atomically with held).
+                    var outcome = InstallFromNetwork(leg.Envelope, leg.LegIndex);
+                    if (outcome == NetworkInstallOutcome.Installed)
+                    {
+                        // Failover observability: record which leg (primary index 0 / secondary index
+                        // > 0) served the config now held (qfg-41nh.18).
+                        _failover?.RecordResolvedFrom(leg.LegIndex);
+                        if (!installedOnce)
+                        {
+                            installedOnce = true;
+                            if (initial)
+                            {
+                                // Latch readiness on the FIRST successful install; keep draining so a
+                                // late-but-newer leg heals forward before this call returns.
+                                _initTcs.TrySetResult(true);
+                            }
+                        }
+                    }
+                    else if (outcome == NetworkInstallOutcome.RejectedOlder)
+                    {
+                        // A 200 dropped by the reject-older guard because it was STRICTLY older than the
+                        // held generation: a leg tried to move this client backwards. That is the failover
+                        // signal worth alerting on, so count it (qfg-41nh.18, narrowed by qfg-rr5b). The
+                        // fetch itself succeeded (liveness already stamped above) — only the install was a
+                        // no-op.
+                        _failover?.RecordGuardRejected();
+                    }
+                    // NetworkInstallOutcome.RejectedSameGeneration: the server answered with the config we
+                    // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the
+                    // fallback poller's engage-time fetch). Nothing to install and nothing wrong — a silent
+                    // no-op, deliberately NOT counted as guardRejected (qfg-rr5b).
+                    else if (outcome == NetworkInstallOutcome.RejectedUnversioned)
+                    {
+                        // A gen<=0 payload while a real generation is held — not installed, but not
+                        // provably older, so a silent no-op (qfg-9dxb.9). Forget its ETag: the server can
+                        // repair the generation for the SAME sha, and a remembered ETag would 304 the
+                        // repaired payload until the next commit (qfg-9dxb.9 follow-up).
+                        transport.ForgetETag(leg.LegIndex, leg.ETag);
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>

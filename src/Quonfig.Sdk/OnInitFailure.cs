@@ -19,7 +19,7 @@ public enum OnInitFailure
     /// Default. <see cref="Quonfig.InitAsync"/> throws a <see cref="Exceptions.QuonfigInitException"/>
     /// at the timeout (<see cref="Exceptions.QuonfigInitTimeoutException"/> when the delivery legs
     /// hung, <see cref="Exceptions.QuonfigInitFailureReason.Unavailable"/> when they answered with
-    /// errors), or at once when every leg rejects the SDK key with 401/403. A caller that catches
+    /// errors), or at once when every configured leg answers an auth-class status (401, 403, 404 or 410). A caller that catches
     /// the exception and keeps the client still gets a client that heals.
     /// </summary>
     Fail = 0,
@@ -27,14 +27,14 @@ public enum OnInitFailure
     /// <summary>
     /// <see cref="Quonfig.InitAsync"/> returns at the timeout without throwing; getters return their
     /// supplied defaults (or honor <see cref="OnNoDefault"/>) until the background load completes.
-    /// A 401/403 from every leg continues at once.
+    /// An auth-class status (401, 403, 404 or 410) from every configured leg continues at once.
     /// </summary>
     Continue = 1,
 
     /// <summary>
     /// <see cref="Quonfig.InitAsync"/> keeps blocking past the timeout, with no upper bound, until the
     /// first config arrives (or the caller's <see cref="System.Threading.CancellationToken"/> fires).
-    /// A 401/403 from every leg is logged at Error and retried, since the key may be provisioned
+    /// An auth-class status (401/403/404/410) from every leg is logged at Error and retried, since the key may be provisioned
     /// late. Wire a readiness probe to <see cref="Quonfig.IsReady"/> so the orchestrator holds traffic.
     /// </summary>
     Wait = 2,

@@ -8,7 +8,7 @@ public enum QuonfigInitFailureReason
     /// <summary>The delivery legs answered with errors (refused, 5xx, bad body) until the init timeout.</summary>
     Unavailable = 0,
 
-    /// <summary>Every delivery leg rejected the SDK key with 401 or 403. Raised at once, without waiting out the timeout.</summary>
+    /// <summary>Every configured delivery leg rejected the SDK key with an auth-class status (401, 403, 404 or 410). Raised at once, without waiting out the timeout.</summary>
     Unauthorized = 1,
 
     /// <summary>No delivery leg answered before the init timeout. Raised as <see cref="QuonfigInitTimeoutException"/>.</summary>

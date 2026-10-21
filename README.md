@@ -35,6 +35,27 @@ This repo publishes four NuGet packages in lock-step from a single tag.
 | `Quonfig.Sdk.Extensions.Logging`     | `ILoggerProvider` filter — dynamic log levels via the BCL `Microsoft.Extensions.Logging` pipeline.      |
 | `Quonfig.Sdk.Serilog`                | Serilog `LoggingLevelSwitch` provider for dynamic log levels.                                            |
 
+## Startup failure (`InitTimeout` / `OnInitFailure`)
+
+`await client.InitAsync()` waits for the first config from Quonfig delivery. Until
+`InitTimeout` (10 s by default, measured from construction) the client retries with
+jittered backoff; then `OnInitFailure` decides:
+
+| `OnInitFailure`   | At the timeout                                                                                       |
+|-------------------|------------------------------------------------------------------------------------------------------|
+| `Fail` (default)  | Throws `QuonfigInitTimeoutException` if the last attempt hung, else `QuonfigInitException` (`Reason = Unavailable`). |
+| `Continue`        | Returns; getters serve code defaults until the background retry heals.                               |
+| `Wait`            | Keeps blocking (no upper bound) until config arrives or your `CancellationToken` fires.              |
+
+- If every configured delivery URL answers 401, 403, 404 or 410, `Fail` throws at once with
+  `Reason = Unauthorized` and `Continue` continues at once; `Wait` logs an error and keeps retrying.
+- `InitTimeout` of zero or below (including `Timeout.InfiniteTimeSpan`) means "try once": exactly one
+  fetch attempt, then the policy above applies immediately. It never means "no deadline".
+- A client you keep after a caught failure keeps retrying in the background and heals. Watch
+  `client.IsReady` / `WaitForReadyAsync()` for readiness.
+- Init log lines and init exceptions name the failing hosts (`host:port`) and HTTP statuses, never the
+  SDK key, URL credentials (`user:pass@`) or response bodies.
+
 ## Failover & `QUONFIG_DOMAIN`
 
 By default the SDK derives every hostname from `QUONFIG_DOMAIN` (default `quonfig.com`):
