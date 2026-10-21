@@ -134,6 +134,35 @@ public sealed class InitConformanceTests
         client.HeldGeneration.Should().Be(5);
     }
 
+    // ---------------------------------------------------------------- install, then the deadline cuts a late leg
+
+    [Theory]
+    [InlineData(OnInitFailure.Fail)]
+    [InlineData(OnInitFailure.Continue)]
+    public async Task InstalledAttempt_DeadlineCutsLateLeg_IsNotAnInitFailure(OnInitFailure mode)
+    {
+        // The primary installs at ~400ms; the hedge already fired the secondary, which hangs past the
+        // 1s init deadline. The deadline cutting the still-draining secondary must not turn a
+        // successful init into an init failure (no "init FAILED" / "STARTING ON CODE DEFAULTS" line).
+        using var leg0 = WireMockServer.Start();
+        using var leg1 = WireMockServer.Start();
+        ServeHealthy(leg0, generation: 3, delay: TimeSpan.FromMilliseconds(400));
+        ServeHealthy(leg1, generation: 3, delay: TimeSpan.FromSeconds(5));
+        var logger = new CaptureLogger();
+        var opts = Options(new[] { leg0.Urls[0], leg1.Urls[0] }, mode, TimeSpan.FromSeconds(1), logger);
+        opts.ConfigFetchHedgeDelay = TimeSpan.FromMilliseconds(100);
+        await using var client = new Quonfig(opts);
+
+        await client.InitAsync();
+        client.IsReady.Should().BeTrue();
+        await Task.Delay(TimeSpan.FromMilliseconds(1500)); // past the deadline
+
+        logger.Lines.Should().NotContain(l => l.Message.Contains("init FAILED"));
+        logger.Lines.Should().NotContain(l => l.Message.Contains("STARTING ON CODE DEFAULTS"));
+        logger.Lines.Should().NotContain(l => l.Message.Contains("no config after"));
+        client.HeldGeneration.Should().Be(3);
+    }
+
     // ---------------------------------------------------------------- D3
 
     [Theory]

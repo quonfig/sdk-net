@@ -942,6 +942,16 @@ public sealed class Quonfig : IQuonfig
                     : (!timedOut && deadlineCts.IsCancellationRequested) || ChainContainsOperationCancelled(ex);
             }
 
+            if (IsReady)
+            {
+                // A leg already installed this attempt (readiness latched, InitAsync returned) and only a
+                // late leg still draining failed or was cut by the deadline: init succeeded. Never log or
+                // apply an init failure for it.
+                _initTcs.TrySetResult(true);
+                StartSse();
+                return;
+            }
+
             _lastInitErrors = FormatLegErrors(uris, failed, lastAttemptTimedOut);
 
             // An auth-class status from every configured leg: the key is rejected. fail raises now and continue
