@@ -254,7 +254,7 @@ public sealed class GetOrRaiseTests
             ApiUrls = new[] { leg0.Urls[0], "http://192.0.2.1:8002" },
             StreamUrls = Array.Empty<string>(),
             FallbackPollEnabled = false,
-            InitTimeout = TimeSpan.FromMilliseconds(10000),
+            InitTimeout = TimeSpan.FromMilliseconds(9000),
             OnInitFailure = OnInitFailure.Fail,
         });
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -262,7 +262,7 @@ public sealed class GetOrRaiseTests
         stopwatch.Stop();
         Assert.False(raised is QuonfigInitTimeoutException, "reason unavailable, not the init timeout");
         Assert.Equal(QuonfigInitFailureReason.Unavailable, raised.Reason);
-        Assert.True(stopwatch.ElapsedMilliseconds < 13000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
+        Assert.True(stopwatch.ElapsedMilliseconds < 12000, $"InitAsync raised after {stopwatch.ElapsedMilliseconds}ms");
     }
 
     [Fact(DisplayName = "init with init_timeout_ms 0 and on_init_failure fail raises after one attempt when every delivery leg refuses the connection")]
