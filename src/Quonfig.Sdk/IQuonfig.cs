@@ -15,7 +15,7 @@ public interface IQuonfig : IAsyncDisposable
 {
     /// <summary>
     /// Completes once the first envelope has been installed (or, under
-    /// <see cref="OnInitFailure.ReturnDefaults"/>, once the init timeout has elapsed and the
+    /// <see cref="OnInitFailure.Continue"/>, once the init timeout has elapsed and the
     /// background load is still pending). Idempotent.
     /// </summary>
     Task InitAsync(CancellationToken cancellationToken = default);

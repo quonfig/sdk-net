@@ -121,7 +121,19 @@ public sealed class QuonfigOptions
     /// <summary>Debounce window when <see cref="DatadirAutoReload"/> is on. Defaults to 200ms.</summary>
     public TimeSpan DatadirAutoReloadDebounce { get; set; } = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>How long the initial load may take before the <see cref="OnInitFailure"/> policy applies. Defaults to 10s.</summary>
+    /// <summary>
+    /// How long the initial load may take before the <see cref="OnInitFailure"/> policy applies.
+    /// Defaults to 10s. Measured from construction.
+    ///
+    /// <para>Zero or negative (including <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>) means
+    /// "try once": the client runs exactly ONE fetch attempt (bounded by the per-leg
+    /// <see cref="ConfigFetchHedgeAbort"/>), then applies <see cref="OnInitFailure"/> at once:
+    /// <see cref="Sdk.OnInitFailure.Fail"/> throws, <see cref="Sdk.OnInitFailure.Continue"/> starts on
+    /// code defaults, <see cref="Sdk.OnInitFailure.Wait"/> keeps retrying. It never means "no deadline".</para>
+    ///
+    /// <para>This is only the init budget: it does not bound individual HTTP requests, so a small value
+    /// does not cap later fetches (fallback poller, <c>RefreshAsync</c>, wait-mode retries).</para>
+    /// </summary>
     public TimeSpan InitTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
@@ -168,8 +180,12 @@ public sealed class QuonfigOptions
     /// </summary>
     public TimeSpan ConfigFetchHedgeAbort { get; set; } = TimeSpan.FromSeconds(6);
 
-    /// <summary>Policy when initial HTTP+SSE load exceeds <see cref="InitTimeout"/>. Defaults to <see cref="OnInitFailure.Throw"/>.</summary>
-    public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Throw;
+    /// <summary>
+    /// What <see cref="Quonfig.InitAsync"/> does when no config has arrived by <see cref="InitTimeout"/>:
+    /// <see cref="OnInitFailure.Fail"/> (default), <see cref="OnInitFailure.Wait"/> or
+    /// <see cref="OnInitFailure.Continue"/>.
+    /// </summary>
+    public OnInitFailure OnInitFailure { get; set; } = OnInitFailure.Fail;
 
     /// <summary>Policy when a typed getter cannot resolve a value AND the caller supplied no default. Defaults to <see cref="Sdk.OnNoDefault.Throw"/>.</summary>
     public OnNoDefault OnNoDefault { get; set; } = OnNoDefault.Throw;

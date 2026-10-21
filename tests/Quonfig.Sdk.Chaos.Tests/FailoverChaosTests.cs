@@ -177,7 +177,7 @@ public sealed class FailoverChaosTests
             InitTimeout = TimeSpan.FromSeconds(10),
             // Don't throw on a slow first fetch — the rig observes readiness from the install
             // timestamp, and background work (refresh loop / SSE) keeps trying.
-            OnInitFailure = OnInitFailure.ReturnDefaults,
+            OnInitFailure = OnInitFailure.Continue,
             OnNoDefault = OnNoDefault.Ignore,
             // The rig observes failover via ResolvedFrom / SseFailedOverToSecondary, not the telemetry
             // collector; opt out so the now-live reporter (qfg-gxm6) does not post to the default

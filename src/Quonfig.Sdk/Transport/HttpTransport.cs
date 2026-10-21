@@ -210,6 +210,7 @@ public sealed class HttpTransport : IDisposable
         {
             var baseUrl = _apiUrls[i];
             var target = BuildTarget(baseUrl);
+            var shown = Redact(target);
             using var request = BuildRequest(target, etag);
             HttpResponseMessage? response = null;
             // Bound this single leg so a hung primary (accepts the connection but never responds)
@@ -244,7 +245,7 @@ public sealed class HttpTransport : IDisposable
                     {
                         // Not a config envelope (null, {}, {"error":..}): a leg error so the next URL
                         // is tried, and its ETag is never stored (qfg-9dxb.3).
-                        lastError = new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)");
+                        lastError = new QuonfigException($"api-delivery at {shown} returned a body that is not a config envelope (missing meta.version)");
                         continue;
                     }
                     // Store the ETag only AFTER the body validated, so a junk 200 can't pin itself
@@ -257,7 +258,7 @@ public sealed class HttpTransport : IDisposable
                     LastResolvedIndex = i;
                     return envelope;
                 }
-                lastError = new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}"));
+                lastError = new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {shown}"));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -269,16 +270,16 @@ public sealed class HttpTransport : IDisposable
                 // Either the per-URL deadline fired (attemptToken, caller still live) or HttpClient's
                 // own Timeout elapsed. Both surface as OperationCanceledException / TaskCanceledException
                 // on net8 and NS2.0. Treat as a per-leg timeout and advance to the next URL.
-                lastError = new QuonfigException($"HTTP timeout contacting {target}", ex);
+                lastError = new QuonfigException($"HTTP timeout contacting {shown}", ex);
             }
             catch (HttpRequestException ex)
             {
-                lastError = new QuonfigException($"transport error contacting {target}: {ex.Message}", ex);
+                lastError = new QuonfigException($"transport error contacting {shown}: {ex.Message}", ex);
             }
             catch (JsonException ex)
             {
                 // Body parse failure — treat as a transport-layer fault so the next URL is tried.
-                lastError = new QuonfigException($"failed to parse envelope from {target}: {ex.Message}", ex);
+                lastError = new QuonfigException($"failed to parse envelope from {shown}: {ex.Message}", ex);
             }
             finally
             {
@@ -418,6 +419,7 @@ public sealed class HttpTransport : IDisposable
         }
         var baseUrl = _apiUrls[legIndex];
         var target = BuildTarget(baseUrl);
+        var shown = Redact(target);
 
         string? etag;
         lock (_etagLock) { etag = _etags[legIndex]; }
@@ -449,7 +451,7 @@ public sealed class HttpTransport : IDisposable
                 {
                     // Not a config envelope (null, {}, {"error":..}): a leg error so the hedge fires
                     // the secondary and nothing is installed; the ETag is never stored (qfg-9dxb.3).
-                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {target} returned a body that is not a config envelope (missing meta.version)"), sc);
+                    return LegResult.Fail(legIndex, new QuonfigException($"api-delivery at {shown} returned a body that is not a config envelope (missing meta.version)"), sc);
                 }
                 // Store the ETag only AFTER the body validated, so a junk 200 can't pin itself as
                 // "current" through later 304s.
@@ -460,27 +462,28 @@ public sealed class HttpTransport : IDisposable
                 }
                 return LegResult.Ok(legIndex, envelope, responseETag, sc);
             }
-            return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {target}")), sc);
+            return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {shown}")), sc);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
         {
-            // The CALLER cancelled (or shut down) — surface as the leg's error; the orchestrator and
-            // the install loop both treat it as a failed leg.
-            return LegResult.Fail(legIndex, new QuonfigException($"hedge leg {legIndex} cancelled contacting {target}"));
+            // The CALLER cancelled (or shut down, or the init deadline cut the leg) — surface as the
+            // leg's error; the orchestrator and the install loop both treat it as a failed leg. The
+            // OCE stays as the inner cause so the init loop classifies a deadline-cut leg as hung.
+            return LegResult.Fail(legIndex, new QuonfigException($"hedge leg {legIndex} cancelled contacting {shown}", ex));
         }
         catch (OperationCanceledException ex)
         {
             // The per-leg hard-abort fired (or HttpClient.Timeout). This leg failed — the other leg
             // (if fired) may still install.
-            return LegResult.Fail(legIndex, new QuonfigException($"HTTP timeout contacting {target}", ex));
+            return LegResult.Fail(legIndex, new QuonfigException($"HTTP timeout contacting {shown}", ex));
         }
         catch (HttpRequestException ex)
         {
-            return LegResult.Fail(legIndex, new QuonfigException($"transport error contacting {target}: {ex.Message}", ex));
+            return LegResult.Fail(legIndex, new QuonfigException($"transport error contacting {shown}: {ex.Message}", ex));
         }
         catch (JsonException ex)
         {
-            return LegResult.Fail(legIndex, new QuonfigException($"failed to parse envelope from {target}: {ex.Message}", ex));
+            return LegResult.Fail(legIndex, new QuonfigException($"failed to parse envelope from {shown}: {ex.Message}", ex));
         }
         finally
         {
@@ -529,6 +532,60 @@ public sealed class HttpTransport : IDisposable
             req.Headers.TryAddWithoutValidation("If-None-Match", etag);
         }
         return req;
+    }
+
+    /// <summary>
+    /// <paramref name="target"/> as it may appear in an error message: scheme, host, port and path,
+    /// never URL userinfo (<c>user:pass@</c>), so credentials embedded in an api URL cannot reach a
+    /// log line or an exception (D4, qfg-9p4i.17.5).
+    /// </summary>
+    internal static string Redact(Uri target)
+    {
+        if (string.IsNullOrEmpty(target.UserInfo)) return target.ToString();
+        var b = new UriBuilder(target) { UserName = string.Empty, Password = string.Empty };
+        return b.Uri.ToString();
+    }
+
+    /// <summary>
+    /// Fires the given legs in parallel (each under the per-leg hard abort, with its own ETag slot)
+    /// and emits one <see cref="LegResult"/> per leg to the returned reader in arrival order. Used by
+    /// the init path to reach legs the two-leg hedge never fires, so the all-legs auth rule works for
+    /// any number of <see cref="ApiUrls"/> (D1, qfg-9p4i.17.5).
+    /// </summary>
+    internal ChannelReader<LegResult> FetchLegsAsync(IReadOnlyList<int> legIndices, CancellationToken cancellationToken)
+    {
+        var channel = Channel.CreateUnbounded<LegResult>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+        _ = RunLegsAsync(channel.Writer, legIndices, cancellationToken);
+        return channel.Reader;
+    }
+
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Runs detached: an unexpected fault is surfaced on the channel so the reader never hangs.")]
+    private async Task RunLegsAsync(ChannelWriter<LegResult> writer, IReadOnlyList<int> legIndices, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var tasks = new List<Task>(legIndices.Count);
+            foreach (var index in legIndices)
+            {
+                tasks.Add(Task.Run(async () =>
+                {
+                    var r = await FetchLegAsync(index, cancellationToken).ConfigureAwait(false);
+                    await writer.WriteAsync(r, cancellationToken).ConfigureAwait(false);
+                }, cancellationToken));
+            }
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            writer.TryComplete();
+        }
+        catch (Exception ex)
+        {
+            writer.TryComplete(ex);
+        }
     }
 
     private static Uri BuildTarget(Uri baseUrl)

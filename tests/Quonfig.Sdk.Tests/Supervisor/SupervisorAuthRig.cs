@@ -191,7 +191,7 @@ internal sealed class SupervisorAuthRig : IAsyncDisposable
             ApiUrls = legs == 1 ? new[] { PrimaryUrl } : new[] { PrimaryUrl, SecondaryUrl },
             StreamUrls = new[] { StreamUrl },
             InitTimeout = TimeSpan.FromSeconds(8),
-            OnInitFailure = OnInitFailure.ReturnDefaults,
+            OnInitFailure = OnInitFailure.Continue,
             OnNoDefault = OnNoDefault.Ignore,
             TelemetrySender = new NoopSender(),
             TelemetryInitialDelay = TimeSpan.FromMinutes(5),

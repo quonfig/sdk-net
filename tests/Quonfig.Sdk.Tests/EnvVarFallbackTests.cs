@@ -194,7 +194,7 @@ public sealed class EnvVarFallbackTests : IDisposable
         StreamUrls = Array.Empty<string>(),
         FallbackPollEnabled = false,
         InitTimeout = TimeSpan.FromSeconds(10),
-        OnInitFailure = OnInitFailure.Throw,
+        OnInitFailure = OnInitFailure.Fail,
         OnNoDefault = OnNoDefault.Ignore,
         // Full telemetry opt-out keeps the built-in HTTP telemetry sender off the network.
         CollectEvaluationSummaries = false,

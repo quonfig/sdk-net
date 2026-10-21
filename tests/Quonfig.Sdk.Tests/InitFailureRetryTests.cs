@@ -10,9 +10,9 @@ using Xunit;
 namespace Quonfig.Sdk.Tests;
 
 /// <summary>
-/// qfg-9p4i.3: under <see cref="OnInitFailure.Throw"/> a caller that catches the
+/// qfg-9p4i.3: under <see cref="OnInitFailure.Fail"/> a caller that catches the
 /// <see cref="Quonfig.InitAsync"/> exception and keeps the client must still get a client that
-/// heals. Before the fix only <see cref="OnInitFailure.ReturnDefaults"/> started the update
+/// heals. Before the fix only <see cref="OnInitFailure.Continue"/> started the update
 /// channel (SSE + fallback poller), so a caught Throw left a client serving defaults forever.
 /// Spec: project/plans/2026-10-05-init-failure-design.md, decision 4 and section E step 1
 /// ("no permanently dead clients").
@@ -54,7 +54,7 @@ public sealed class InitFailureRetryTests
             ApiUrls = new[] { server.Urls[0] },
             StreamUrls = new[] { server.Urls[0] },
             InitTimeout = TimeSpan.FromSeconds(5),
-            OnInitFailure = OnInitFailure.Throw,
+            OnInitFailure = OnInitFailure.Fail,
             OnNoDefault = OnNoDefault.Ignore,
             FallbackPollThreshold = TimeSpan.FromMilliseconds(200),
             FallbackPollInterval = TimeSpan.FromMilliseconds(200),
@@ -75,6 +75,6 @@ public sealed class InitFailureRetryTests
             await Task.Delay(50);
         }
         client.HeldGeneration.Should().Be(7,
-            "after a caught OnInitFailure.Throw the update channel must stay alive and install the first envelope");
+            "after a caught OnInitFailure.Fail the update channel must stay alive and install the first envelope");
     }
 }
