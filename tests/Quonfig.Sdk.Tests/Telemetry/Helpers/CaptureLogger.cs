@@ -13,15 +13,26 @@ internal sealed class CaptureLogger : ILogger
 {
     private readonly object _gate = new();
     private readonly List<(LogLevel Level, string Message)> _lines = new();
+    private readonly List<Exception> _exceptions = new();
 
     public IReadOnlyList<(LogLevel Level, string Message)> Lines
     {
         get { lock (_gate) return _lines.ToList(); }
     }
 
+    /// <summary>Every non-null exception passed to a log call, in order.</summary>
+    public IReadOnlyList<Exception> Exceptions
+    {
+        get { lock (_gate) return _exceptions.ToList(); }
+    }
+
     public void Clear()
     {
-        lock (_gate) _lines.Clear();
+        lock (_gate)
+        {
+            _lines.Clear();
+            _exceptions.Clear();
+        }
     }
 
     /// <summary>The contract's <c>log_count(level, /re/)</c>.</summary>
@@ -40,6 +51,10 @@ internal sealed class CaptureLogger : ILogger
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
     {
-        lock (_gate) _lines.Add((logLevel, formatter(state, exception)));
+        lock (_gate)
+        {
+            _lines.Add((logLevel, formatter(state, exception)));
+            if (exception is not null) _exceptions.Add(exception);
+        }
     }
 }
