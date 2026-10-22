@@ -1866,6 +1866,20 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     internal long SseOkWithoutFrameTotal => _sseCounters.OkWithoutFrame;
 
+    private long _callbackErrorsOnConfigUpdate;
+    private long _callbackErrorsOnConnectionStateChange;
+
+    /// <summary>
+    /// Internal, test-only: <c>quonfig_sdk_callback_errors_total</c> for <paramref name="callback"/>
+    /// (<c>on_config_update</c> or <c>on_connection_state_change</c>); any other label reads 0.
+    /// </summary>
+    internal long CallbackErrorsTotal(string callback) => callback switch
+    {
+        "on_config_update" => Interlocked.Read(ref _callbackErrorsOnConfigUpdate),
+        "on_connection_state_change" => Interlocked.Read(ref _callbackErrorsOnConnectionStateChange),
+        _ => 0,
+    };
+
     /// <summary>
     /// Internal, test-only: <c>quonfig_sdk_worker_restart_total</c> for <paramref name="layer"/>.
     /// Layer "1" is the SSE worker (each run that ended and was restarted); layer "2" is the
@@ -1990,7 +2004,11 @@ public sealed class Quonfig : IQuonfig
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                _logger.LogWarning(ex, "quonfig: OnConfigChange handler threw: {Message}", ex.Message);
+                // Test 5 (qfg-6vno.21): a user callback throw is caught here, counted, and logged
+                // at Error with the exception and stack. It is not a worker restart and changes no
+                // connection state; the remaining listeners still run.
+                Interlocked.Increment(ref _callbackErrorsOnConfigUpdate);
+                _logger.LogError(ex, "quonfig: OnConfigChange callback (onConfigUpdate) threw: {Message}", ex.Message);
             }
         }
     }
@@ -2019,7 +2037,9 @@ public sealed class Quonfig : IQuonfig
             }
             catch (Exception ex) when (!(ex is OperationCanceledException))
             {
-                _logger.LogWarning(ex, "quonfig: OnConnectionStateChange handler threw: {Message}", ex.Message);
+                // Test 5 (qfg-6vno.21): counted and logged at Error; state is already updated.
+                Interlocked.Increment(ref _callbackErrorsOnConnectionStateChange);
+                _logger.LogError(ex, "quonfig: OnConnectionStateChange callback threw: {Message}", ex.Message);
             }
         }
     }

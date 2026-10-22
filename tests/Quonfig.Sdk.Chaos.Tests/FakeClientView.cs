@@ -13,6 +13,7 @@ internal sealed class FakeClientView : IChaosClientView
     public long Restarts1 { get; set; }
     public long Restarts2 { get; set; }
     public bool Ready { get; set; }
+    public Dictionary<string, long> CallbackErrors { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, string> Values { get; } = new(StringComparer.Ordinal);
 
     public Sdk.ConnectionState ConnectionState => State;
@@ -20,6 +21,7 @@ internal sealed class FakeClientView : IChaosClientView
     public DateTimeOffset? LastSuccessfulRefresh => LastRefresh;
     public long SseConnectAttemptsTotal => Attempts;
     public long WorkerRestartTotal(string layer) => layer == "1" ? Restarts1 : layer == "2" ? Restarts2 : 0;
+    public long CallbackErrorsTotal(string callback) => CallbackErrors.TryGetValue(callback, out var n) ? n : 0;
     public bool IsReady => Ready;
     public string? GetString(string key, string defaultValue) => Values.TryGetValue(key, out var v) ? v : defaultValue;
 

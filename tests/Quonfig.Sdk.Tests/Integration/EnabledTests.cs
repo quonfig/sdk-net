@@ -902,6 +902,227 @@ public sealed class EnabledTests
         Assert.False(actual);
     }
 
+    [Fact(DisplayName = "returns true for PROP_MATCHES when the regex matches part of the prop (unanchored search)")]
+    public async Task ReturnsTrueForPropMatchesWhenTheRegexMatchesPartOfThePropUnanchoredSearch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "xaab" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH when the regex matches part of the prop (unanchored search)")]
+    public async Task ReturnsFalseForPropDoesNotMatchWhenTheRegexMatchesPartOfThePropUnanchoredSearch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "xaab" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_MATCHES with an anchored regex when the whole prop matches")]
+    public async Task ReturnsTrueForPropMatchesWithAnAnchoredRegexWhenTheWholePropMatches()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "123" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.anchored");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_MATCHES with an anchored regex when the prop is too long")]
+    public async Task ReturnsFalseForPropMatchesWithAnAnchoredRegexWhenThePropIsTooLong()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "1234" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_MATCHES with an anchored regex when the prop has a non-matching character")]
+    public async Task ReturnsFalseForPropMatchesWithAnAnchoredRegexWhenThePropHasANonMatchingCharacter()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "12a" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_MATCHES when the prop is not a string")]
+    public async Task ReturnsFalseForPropMatchesWhenThePropIsNotAString()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = new ContextValueLong(123L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_MATCHES when the prop is missing")]
+    public async Task ReturnsFalseForPropMatchesWhenThePropIsMissing()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_DOES_NOT_MATCH with an anchored regex when the prop is too long")]
+    public async Task ReturnsTrueForPropDoesNotMatchWithAnAnchoredRegexWhenThePropIsTooLong()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "1234" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.anchored");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns true for PROP_DOES_NOT_MATCH with an anchored regex when the prop has a non-matching character")]
+    public async Task ReturnsTrueForPropDoesNotMatchWithAnAnchoredRegexWhenThePropHasANonMatchingCharacter()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "12a" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.anchored");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH with an anchored regex when the whole prop matches")]
+    public async Task ReturnsFalseForPropDoesNotMatchWithAnAnchoredRegexWhenTheWholePropMatches()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "123" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH when the prop is not a string")]
+    public async Task ReturnsFalseForPropDoesNotMatchWhenThePropIsNotAString()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = new ContextValueLong(123L) } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH when the prop is missing")]
+    public async Task ReturnsFalseForPropDoesNotMatchWhenThePropIsMissing()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.anchored");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_MATCHES when the stored regex is invalid")]
+    public async Task ReturnsFalseForPropMatchesWhenTheStoredRegexIsInvalid()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "(" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.matches.invalid-pattern");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for PROP_DOES_NOT_MATCH when the stored regex is invalid")]
+    public async Task ReturnsFalseForPropDoesNotMatchWhenTheStoredRegexIsInvalid()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "abc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.does-not-match.invalid-pattern");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns true for IN_SEG when the segment's PROP_DOES_NOT_MATCH criterion holds")]
+    public async Task ReturnsTrueForInSegWhenTheSegmentSPropDoesNotMatchCriterionHolds()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "abc" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.does-not-match");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "returns false for IN_SEG when the segment's PROP_DOES_NOT_MATCH regex matches")]
+    public async Task ReturnsFalseForInSegWhenTheSegmentSPropDoesNotMatchRegexMatches()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["code"] = "123" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.does-not-match");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "returns false for IN_SEG when the segment's PROP_DOES_NOT_MATCH prop is missing")]
+    public async Task ReturnsFalseForInSegWhenTheSegmentSPropDoesNotMatchPropIsMissing()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["key"] = "michael" } });
+        var actual = scoped.IsFeatureEnabled("feature-flag.in-segment.does-not-match");
+        Assert.False(actual);
+    }
+
     [Fact(DisplayName = "returns true for IS_PRESENT rule when the given prop is a non-empty string")]
     public async Task ReturnsTrueForIsPresentRuleWhenTheGivenPropIsANonEmptyString()
     {

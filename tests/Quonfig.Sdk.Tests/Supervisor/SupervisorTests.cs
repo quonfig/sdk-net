@@ -161,8 +161,9 @@ public sealed partial class SupervisorTests
         }
     }
 
-    // Test 5 — Panic-in-callback recovery. A throw at the worker boundary must
-    // not crash the supervisor loop.
+    // Worker-throw recovery (Test 1 family). A throw inside the WORKER itself must not crash the
+    // supervisor loop and is a restart. A throw from a USER callback is not: see
+    // Test5_OnConfigUpdateThrow_* in SupervisorTests.CallbackThrow.cs (contract Test 5, v2026.10.22.2).
     [Fact]
     public async Task RecoversFromOnEnvelopeStyleThrow()
     {

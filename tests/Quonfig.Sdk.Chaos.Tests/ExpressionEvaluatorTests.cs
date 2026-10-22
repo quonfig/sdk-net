@@ -58,6 +58,30 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
+    public void SdkMetricCallbackErrorsByCallbackLabel()
+    {
+        // Scenario 10 exp[0] (ITD v2026.10.22.2) narrows by callback='...', not layer='...'.
+        var (probe, fake) = FakeClientView.Probe();
+        var ev = new ExpressionEvaluator(probe);
+        const string row = "client.sdkMetric('quonfig_sdk_callback_errors_total', callback='on_config_update') >= 1";
+        Assert.False(ev.Evaluate(row).Passed);
+        fake.CallbackErrors["on_config_update"] = 1;
+        var r = ev.Evaluate(row);
+        Assert.True(r.Passed, r.Reason);
+        Assert.False(ev.Evaluate("client.sdkMetric('quonfig_sdk_callback_errors_total', callback='on_connection_state_change') >= 1").Passed);
+        Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sdk_callback_errors_total') == 1").Passed);
+    }
+
+    [Fact]
+    public void SdkMetricUnknownLabel_FailsLoudly()
+    {
+        var ev = new ExpressionEvaluator(FakeClientView.Probe().Probe);
+        var r = ev.Evaluate("client.sdkMetric('quonfig_sdk_worker_restart_total', callback='on_config_update') == 0");
+        Assert.Equal(ExpressionEvaluator.Verdict.Fail, r.Outcome);
+        Assert.Contains("with label callback", r.Reason);
+    }
+
+    [Fact]
     public void SdkMetricSseConnectAttempts_ReadsTheSdkCounter()
     {
         // Scenario 09's storm guard (attempts < 100) reads the SDK's own attempt counter, which
@@ -96,8 +120,8 @@ public class ExpressionEvaluatorTests
     public void SdkLog_ErrorLevel_DoesNotMatchWarningLines()
     {
         // sdkLog(level, re) counts lines at exactly that level (chaos README). The old probe
-        // let 'error' match Warning, which hid that sdk-net logs a caught callback throw at
-        // Warning (qfg-6vno.4, qfg-6vno.21).
+        // let 'error' match Warning, which hid that sdk-net logged a caught callback throw at
+        // Warning (qfg-6vno.4; fixed to Error in qfg-6vno.21).
         var probe = new ChaosProbe();
         probe.Log("warning", "quonfig: OnConfigChange handler threw: simulated user-callback panic");
         var ev = new ExpressionEvaluator(probe);
