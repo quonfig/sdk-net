@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fixed (minor): on .NET Framework hosts (the netstandard2.0 build), closing the client or entering auth-failed no longer waits 5 s for the SSE stream (qfg-6vno.13).** On netstandard2.0 the SSE read could not be cancelled, so cancelling it left a connected read blocked. `CloseAsync()` waited its full 5 s before disposing, and the auth-failed entry waited 5 s and then could leave a live stream open until the 90 s read watchdog fired. Cancelling the SSE token now disposes the response body, which unblocks the read at once, the same way the watchdog does. The net8.0 build already cancelled the read; it gets the same safeguard.
 - **Fixed (patch): `OnConfigChange` handlers no longer run while the SDK holds its install lock (qfg-6vno.12).** Before, every network install (initial fetch, refresh / fallback poll, SSE update) fired `OnConfigChange` inside the lock that serializes installs. A slow handler stalled the SSE reader, the fallback poller and every refresh, and a handler that waited on another thread doing an install deadlocked. Handlers now run after the lock is released. They are still serialized and in install order: a change installed while a handler is running is delivered after that handler returns, possibly on the thread that is already delivering. The initial-load handler still fires before `InitAsync()` returns. Getters were never affected. Same fix as sdk-go qfg-eefx.
 
 ## 1.9.0 - 2026-10-21

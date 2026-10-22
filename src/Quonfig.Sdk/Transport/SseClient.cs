@@ -473,6 +473,29 @@ public sealed class SseClient : IDisposable
         using var watchdog = new CancellationTokenSource();
         CancellationTokenRegistration disposeOnStall = default;
         var stallFired = false;
+
+        void DisposeBody(string reason)
+        {
+            try
+            {
+                body.Dispose();
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: the read loop is already on its way out, but
+                // give operators a signal that the dispose itself failed.
+                try
+                {
+                    logger.LogWarning(ex,
+                        "SSE: {Reason} body.Dispose() threw — {Message}", reason, ex.Message);
+                }
+                catch
+                {
+                    // Logger itself failed; nothing left to do.
+                }
+            }
+        }
+
         if (watchdogEnabled)
         {
             disposeOnStall = watchdog.Token.Register(() =>
@@ -481,27 +504,18 @@ public sealed class SseClient : IDisposable
                 logger.LogWarning(
                     "SSE: read watchdog fired after {TimeoutMs}ms of silence — disposing body to force reconnect",
                     readTimeout.TotalMilliseconds);
-                try
-                {
-                    body.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    // Best-effort: the read loop is already on its way out, but
-                    // give operators a signal that the dispose itself failed.
-                    try
-                    {
-                        logger.LogWarning(ex,
-                            "SSE: watchdog body.Dispose() threw — {Message}", ex.Message);
-                    }
-                    catch
-                    {
-                        // Logger itself failed; nothing left to do.
-                    }
-                }
+                DisposeBody("watchdog");
             });
             watchdog.CancelAfter(readTimeout);
         }
+
+        // qfg-6vno.13: cancelling the caller's token must unblock an in-flight read. On
+        // netstandard2.0 ReadLineAsync takes no token and a .NET Framework network read ignores
+        // cancellation, so without this a connected read stayed blocked until the watchdog, and
+        // CloseAsync / the auth-failed entry waited their full 5 s. Disposing the body is what
+        // unblocks the read, as the watchdog does. Registered on every target: it is a no-op cost
+        // where the read already honors the token.
+        using var disposeOnCancel = cancellationToken.Register(() => DisposeBody("cancellation"));
 
         // Leave the underlying stream open so the finally block in the caller is the
         // single owner of disposal — the watchdog disposes via the registered callback,

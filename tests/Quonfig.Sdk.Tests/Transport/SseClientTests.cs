@@ -126,6 +126,34 @@ public sealed class SseClientTests
         stalling.Disposed.Should().BeTrue("watchdog must call Stream.Dispose on stall");
     }
 
+    // qfg-6vno.13: on netstandard2.0 (.NET Framework hosts) ReadLineAsync takes no token, and a
+    // network stream's read ignores cancellation, so cancelling the SSE token left a connected read
+    // blocked until the 90s watchdog. CloseAsync and the auth-failed entry then waited their full
+    // 5s. The stream here ignores the token exactly like that read; cancelling must still return
+    // promptly because the token disposes the body.
+    [Fact]
+    public async Task ParseStreamAsync_CancellationUnblocksReadThatIgnoresTheToken()
+    {
+        using var stalling = new StallingStream(ignoreCancellation: true);
+        using var cts = new CancellationTokenSource();
+
+        var parse = SseClient.ParseStreamAsync(
+            stalling,
+            _ => { },
+            readTimeout: TimeSpan.FromSeconds(90),
+            cancellationToken: cts.Token);
+        await Task.Delay(100);
+        var start = DateTime.UtcNow;
+        cts.Cancel();
+
+        var finished = await Task.WhenAny(parse, Task.Delay(TimeSpan.FromSeconds(3)));
+        var elapsed = DateTime.UtcNow - start;
+
+        finished.Should().BeSameAs(parse, "cancelling the token must unblock a read that ignores it");
+        elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2));
+        stalling.Disposed.Should().BeTrue("cancellation must dispose the body to unblock the read");
+    }
+
     [Fact]
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Globalization", "CA1307:Specify StringComparison for clarity",
@@ -517,8 +545,15 @@ public sealed class SseClientTests
     /// </summary>
     private sealed class StallingStream : Stream
     {
+        private readonly bool _ignoreCancellation;
         private SemaphoreSlim? _disposed = new(0, 1);
         public bool Disposed { get; private set; }
+
+        /// <param name="ignoreCancellation">
+        /// When true, reads ignore their token, like a .NET Framework network-stream read
+        /// (qfg-6vno.13). Only Dispose unblocks them.
+        /// </param>
+        public StallingStream(bool ignoreCancellation = false) => _ignoreCancellation = ignoreCancellation;
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -545,7 +580,7 @@ public sealed class SseClientTests
             var sem = _disposed;
             if (sem != null)
             {
-                await sem.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await sem.WaitAsync(_ignoreCancellation ? CancellationToken.None : cancellationToken).ConfigureAwait(false);
             }
             throw new ObjectDisposedException(nameof(StallingStream));
         }
