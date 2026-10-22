@@ -30,6 +30,15 @@ internal sealed class ChaosScenario
         public int WallClockSeconds { get; set; } = 30;
         public string? UserCallback { get; set; }
 
+        /// <summary>Init-failure scenarios (00-*): <c>fail | wait | continue</c>; null = the usual client setup.</summary>
+        public string? OnInitFailure { get; set; }
+
+        /// <summary>The SDK's InitTimeout for this test, in ms (requires <see cref="OnInitFailure"/>).</summary>
+        public int? InitTimeoutMs { get; set; }
+
+        /// <summary>With <c>fail</c>: the runner catches the init error and keeps the client.</summary>
+        public bool CatchInitFailure { get; set; }
+
         /// <summary>Rig topology: <c>single</c>, <c>failover</c> (1 upstream + 2 proxies), or <c>ordering</c> (2 upstreams).</summary>
         public string? Topology { get; set; }
 
@@ -61,6 +70,8 @@ internal sealed class ChaosScenario
         public int? SseBandwidthKbps { get; set; }
         public int? SseDownMs { get; set; }
         public int? BothDownMs { get; set; }
+        public int? HttpDownMs { get; set; }
+        public int? HttpStatus { get; set; }
         public int? SseHalfOpenAfterBytes { get; set; }
         public int? SseHttpStatus { get; set; }
         // Failover/ordering rig faults on the PRIMARY HTTP leg ('http' proxy).

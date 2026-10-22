@@ -78,7 +78,17 @@ internal sealed class ExpressionEvaluator
     private static readonly Regex ReServerMetric =
         new(@"^server_metric\(\s*'([^']+)'\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
     private static readonly Regex ReSdkLog =
-        new(@"^client\.sdkLog\(\s*'([^']+)'\s*,\s*/(.+)/i\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
+        new(@"^client\.sdkLog\(\s*'([^']+)'\s*,\s*/(.+)/(i?)\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
+
+    // Init-failure vocabulary (00-boot-both-down-then-restore, chaos README).
+    private static readonly Regex ReInitState =
+        new(@"^client\.initState\(\)\s*(==|!=)\s*'([^']+)'$", RegexOptions.Compiled);
+    private static readonly Regex ReGetString =
+        new(@"^client\.getString\(\s*'([^']+)'\s*,\s*'([^']*)'\s*\)\s*(==|!=)\s*'([^']*)'$", RegexOptions.Compiled);
+    private static readonly Regex ReReadyEvents =
+        new(@"^client\.readyEventCount\(\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
+    private static readonly Regex ReReady =
+        new(@"^client\.ready\(\)\s*==\s*(true|false)$", RegexOptions.Compiled);
 
     private readonly ChaosProbe _probe;
 
@@ -184,6 +194,35 @@ internal sealed class ExpressionEvaluator
             var ok = CompareLong(op, lastMs, threshold);
             return new Result(ok, "lastSuccessfulRefresh=" + lastMs + " " + op + " " + threshold);
         }
+        if ((m = ReInitState.Match(expr)).Success)
+        {
+            var got = _probe.InitState();
+            var want = m.Groups[2].Value;
+            var op = m.Groups[1].Value;
+            var ok = op == "==" ? got == want : got != want;
+            return new Result(ok, "initState=" + got + " " + op + " " + want);
+        }
+        if ((m = ReGetString.Match(expr)).Success)
+        {
+            var got = _probe.GetString(m.Groups[1].Value, m.Groups[2].Value);
+            var want = m.Groups[4].Value;
+            var op = m.Groups[3].Value;
+            var ok = op == "==" ? got == want : got != want;
+            return new Result(ok, "getString(" + m.Groups[1].Value + ")=" + (got ?? "null") + " " + op + " " + want);
+        }
+        if ((m = ReReadyEvents.Match(expr)).Success)
+        {
+            var got = _probe.ReadyEventCount();
+            var want = long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            var op = m.Groups[1].Value;
+            return new Result(CompareLong(op, got, want), "readyEventCount=" + got + " " + op + " " + want);
+        }
+        if ((m = ReReady.Match(expr)).Success)
+        {
+            var want = bool.Parse(m.Groups[1].Value);
+            var got = _probe.Ready();
+            return new Result(got == want, "ready=" + got + " want " + want);
+        }
         if ((m = ReSdkMetric.Match(expr)).Success)
         {
             var metric = m.Groups[1].Value;
@@ -204,17 +243,35 @@ internal sealed class ExpressionEvaluator
             var note = new SkipNote(expr, ServerMetricSkipReason);
             return new Result(Verdict.Skipped, SkippedReason(new[] { note }), new[] { note });
         }
-        if ((m = ReSdkLog.Match(expr)).Success)
+        if (TryEvalSdkLog(_probe, expr, out var logOk, out var logReason))
         {
-            var level = m.Groups[1].Value;
-            var re = new Regex(m.Groups[2].Value, RegexOptions.IgnoreCase);
-            var n = _probe.SdkLogMatches(level, re);
-            var want = int.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
-            var op = m.Groups[3].Value;
-            var ok = CompareLong(op, n, want);
-            return new Result(ok, "sdkLog(" + level + ",/" + m.Groups[2].Value + "/i)=" + n + " " + op + " " + want);
+            return new Result(logOk, logReason);
         }
         return new Result(false, "unrecognized expression: " + expr);
+    }
+
+    /// <summary>
+    /// <c>client.sdkLog(level, /re/)</c> or <c>/re/i</c>: SDK log lines at exactly
+    /// <c>level</c> matching <c>re</c> (case-insensitive only with the <c>i</c> flag). Shared with
+    /// the failover rig's evaluator.
+    /// </summary>
+    internal static bool TryEvalSdkLog(ChaosProbe probe, string expr, out bool ok, out string reason)
+    {
+        var m = ReSdkLog.Match(expr);
+        if (!m.Success)
+        {
+            ok = false;
+            reason = string.Empty;
+            return false;
+        }
+        var level = m.Groups[1].Value;
+        var flags = m.Groups[3].Value == "i" ? RegexOptions.IgnoreCase : RegexOptions.None;
+        var n = probe.SdkLogMatches(level, new Regex(m.Groups[2].Value, flags));
+        var want = int.Parse(m.Groups[5].Value, CultureInfo.InvariantCulture);
+        var op = m.Groups[4].Value;
+        ok = CompareLong(op, n, want);
+        reason = "sdkLog(" + level + ",/" + m.Groups[2].Value + "/" + m.Groups[3].Value + ")=" + n + " " + op + " " + want;
+        return true;
     }
 
     private static string SkippedReason(IEnumerable<SkipNote> notes) =>

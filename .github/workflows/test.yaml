@@ -29,6 +29,13 @@ jobs:
           # adopting new test cases. See integration-test-data/RELEASING.md.
           ref: v2026.10.21.1
 
+      # Unit, release, chaos and failover-chaos must run against one ITD tag (qfg-6vno.7):
+      # a chaos pin that trails the unit pin runs chaos against an older contract.
+      - name: Check integration-test-data refs match across workflows
+        if: matrix.tfm == 'net8.0' && runner.os == 'Linux'
+        working-directory: sdk-net
+        run: scripts/check-itd-refs.sh
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v4
         with:

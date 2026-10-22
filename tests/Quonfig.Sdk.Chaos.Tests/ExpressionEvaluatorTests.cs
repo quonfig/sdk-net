@@ -13,44 +13,44 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void ConnectionStateEquality_PassesAndFails()
     {
-        var probe = new ChaosProbe();
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var (probe, fake) = FakeClientView.Probe();
+        fake.State = Sdk.ConnectionState.Connected;
         var ev = new ExpressionEvaluator(probe);
         Assert.True(ev.Evaluate("client.connectionState() == 'connected'").Passed);
         Assert.False(ev.Evaluate("client.connectionState() == 'disconnected'").Passed);
     }
 
     [Fact]
-    public void OrShortCircuits_AcceptsReconnectingOrConnected()
+    public void OrShortCircuits_AcceptsDisconnectedOrConnected()
     {
-        var probe = new ChaosProbe();
-        // Inferred "reconnecting" via an SSE drop (since sdk-net's enum has no such state and
-        // sdk-net never reports it through the SDK callback). RecordSseDrop also bumps the
-        // restart counter, but the test only cares about the state side here.
-        probe.RecordSseDrop();
+        // Scenario 02 row 2 (ITD v2026.10.21.1): the SDK's Disconnected is reported as
+        // 'disconnected', never an invented 'reconnecting' (qfg-6vno.4).
+        var (probe, fake) = FakeClientView.Probe();
+        fake.State = Sdk.ConnectionState.Disconnected;
         var ev = new ExpressionEvaluator(probe);
-        Assert.Equal("reconnecting", probe.ConnectionState());
-        Assert.True(ev.Evaluate("client.connectionState() == 'reconnecting' OR client.connectionState() == 'connected'").Passed);
+        Assert.Equal("disconnected", probe.ConnectionState());
+        Assert.True(ev.Evaluate("client.connectionState() == 'disconnected' OR client.connectionState() == 'connected'").Passed);
+        Assert.False(ev.Evaluate("client.connectionState() == 'reconnecting'").Passed);
     }
 
     [Fact]
     public void AndCombinesMultipleLeafChecks()
     {
-        var probe = new ChaosProbe();
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var (probe, fake) = FakeClientView.Probe();
+        fake.State = Sdk.ConnectionState.Connected;
         var ev = new ExpressionEvaluator(probe);
         Assert.True(ev.Evaluate("client.connectionState() == 'connected' AND client.fallbackPollerActive() == false").Passed);
         // And fails if any leaf fails.
-        probe.OnConnectionState(Sdk.ConnectionState.FallingBack);
+        fake.State = Sdk.ConnectionState.FallingBack;
+        fake.FallbackActive = true;
         Assert.False(ev.Evaluate("client.connectionState() == 'connected' AND client.fallbackPollerActive() == false").Passed);
     }
 
     [Fact]
     public void SdkMetricByLayerInequality()
     {
-        var probe = new ChaosProbe();
-        probe.IncRestartLayer1();
-        probe.IncRestartLayer1();
+        var (probe, fake) = FakeClientView.Probe();
+        fake.Restarts1 = 2;
         var ev = new ExpressionEvaluator(probe);
         Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sdk_worker_restart_total', layer='1') >= 1").Passed);
         Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sdk_worker_restart_total', layer='1') == 2").Passed);
@@ -58,23 +58,16 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
-    public void SdkMetricSseConnectAttempts_CountsEveryTransitionIntoConnected()
+    public void SdkMetricSseConnectAttempts_ReadsTheSdkCounter()
     {
-        // Scenario 09 (flapping) asserts quonfig_sse_connect_attempts_total < 100. Like sdk-go's
-        // probe (onSSEState: connAttempts++), every transition into connected is one attempt
-        // (qfg-goi1.2.43).
-        var probe = new ChaosProbe();
+        // Scenario 09's storm guard (attempts < 100) reads the SDK's own attempt counter, which
+        // also counts attempts that failed before a frame and so fired no state edge (qfg-6vno.4).
+        var (probe, fake) = FakeClientView.Probe();
         var ev = new ExpressionEvaluator(probe);
-        var before = ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') == 0");
-        Assert.True(before.Passed, before.Reason);
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
-        probe.OnConnectionState(Sdk.ConnectionState.Disconnected);
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
-        probe.OnConnectionState(Sdk.ConnectionState.FallingBack);
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
-        var r = ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') == 3");
-        Assert.True(r.Passed, r.Reason);
-        Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') < 100").Passed);
+        Assert.True(ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') == 0").Passed);
+        fake.Attempts = 150;
+        var r = ev.Evaluate("client.sdkMetric('quonfig_sse_connect_attempts_total') < 100");
+        Assert.False(r.Passed, r.Reason);
     }
 
     [Fact]
@@ -82,7 +75,7 @@ public class ExpressionEvaluatorTests
     {
         // A metric the probe does not implement used to read as 0, so "== 0" (or "< 100")
         // passed without checking anything. It must fail and name the metric (qfg-goi1.2.23).
-        var ev = new ExpressionEvaluator(new ChaosProbe());
+        var ev = new ExpressionEvaluator(FakeClientView.Probe().Probe);
         var r = ev.Evaluate("client.sdkMetric('typo_total') == 0");
         Assert.Equal(ExpressionEvaluator.Verdict.Fail, r.Outcome);
         Assert.Contains("unknown sdkMetric \"typo_total\"", r.Reason);
@@ -100,17 +93,16 @@ public class ExpressionEvaluatorTests
     }
 
     [Fact]
-    public void SdkLog_ErrorLevel_AlsoMatchesWarningSeverity()
+    public void SdkLog_ErrorLevel_DoesNotMatchWarningLines()
     {
-        // Scenario 10's literal YAML asks for sdkLog('error', ...). sdk-net catches user-callback
-        // exceptions at LogWarning (the SDK recovered), so a strict-equal level filter would
-        // mark the expectation red even though the diagnostic the assertion targets did fire.
-        // The probe's "one-step-lower floor" rule makes this pass.
+        // sdkLog(level, re) counts lines at exactly that level (chaos README). The old probe
+        // let 'error' match Warning, which hid that sdk-net logs a caught callback throw at
+        // Warning (qfg-6vno.4, qfg-6vno.21).
         var probe = new ChaosProbe();
-        probe.Log("warning", "quonfig: OnConnectionStateChange handler threw: simulated user-callback panic");
+        probe.Log("warning", "quonfig: OnConfigChange handler threw: simulated user-callback panic");
         var ev = new ExpressionEvaluator(probe);
-        var r = ev.Evaluate("client.sdkLog('error', /callback|onConfigUpdate/i) >= 1");
-        Assert.True(r.Passed, r.Reason);
+        Assert.True(ev.Evaluate("client.sdkLog('error', /callback|onConfigUpdate/i) == 0").Passed);
+        Assert.True(ev.Evaluate("client.sdkLog('warn', /callback/i) == 1").Passed);
     }
 
     [Fact]
@@ -148,8 +140,8 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void LastSuccessfulRefresh_RelativeToNow()
     {
-        var probe = new ChaosProbe();
-        probe.RecordRefresh(System.DateTime.UtcNow); // ~0ms ago
+        var (probe, fake) = FakeClientView.Probe();
+        fake.LastRefresh = System.DateTimeOffset.UtcNow; // ~0ms ago
         var ev = new ExpressionEvaluator(probe);
         // Recent install (within 5s) should satisfy ">= (now() - 5000)".
         Assert.True(ev.Evaluate("client.lastSuccessfulRefresh() >= (now() - 5000)").Passed);
@@ -176,7 +168,7 @@ public class ExpressionEvaluatorTests
         // server_metric(...) used to be stubbed to 0, so "== 0" passed without checking anything.
         // The rig cannot read api-delivery's metrics, so the leaf must be SKIPPED with the reason
         // (qfg-goi1.1.5), never PASS.
-        var ev = new ExpressionEvaluator(new ChaosProbe());
+        var ev = new ExpressionEvaluator(FakeClientView.Probe().Probe);
         foreach (var expr in new[] { LagExpr, "server_metric('quonfig_subscriber_lag_seconds') > 60" })
         {
             var r = ev.Evaluate(expr);
@@ -196,8 +188,8 @@ public class ExpressionEvaluatorTests
     public void SkippedLeaf_IsNeutralInAnd_OtherLeavesStillEnforced()
     {
         // Scenario 02: "client.connectionState() == 'connected' AND server_metric(...) == 0".
-        var probe = new ChaosProbe();
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var (probe, fake) = FakeClientView.Probe();
+        fake.State = Sdk.ConnectionState.Connected;
         var ev = new ExpressionEvaluator(probe);
 
         var pass = ev.Evaluate("client.connectionState() == 'connected' AND " + LagExpr);
@@ -214,8 +206,8 @@ public class ExpressionEvaluatorTests
     [Fact]
     public void SkippedLeaf_IsNeutralInOr_DoesNotSatisfyIt()
     {
-        var probe = new ChaosProbe();
-        probe.OnConnectionState(Sdk.ConnectionState.Connected);
+        var (probe, fake) = FakeClientView.Probe();
+        fake.State = Sdk.ConnectionState.Connected;
         var ev = new ExpressionEvaluator(probe);
 
         Assert.Equal(ExpressionEvaluator.Verdict.Fail,

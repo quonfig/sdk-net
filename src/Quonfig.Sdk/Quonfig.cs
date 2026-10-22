@@ -1485,6 +1485,7 @@ public sealed class Quonfig : IQuonfig
             logger: _logger)
             {
                 WaitHook = _opts.TestWaitHook,
+                Counters = _sseCounters,
             };
             _sseClient = sse;
             _sseRunTask = Task.Run(() => sse.RunAsync(sseCts.Token));
@@ -1824,6 +1825,26 @@ public sealed class Quonfig : IQuonfig
 
     /// <summary>Test/diagnostic: whether the Layer 2 fallback poller is engaged right now.</summary>
     internal bool FallbackPollerActive => _fallbackPoller?.Active ?? false;
+
+    /// <summary>Layer 1 counters shared by every SSE stream this client starts (test-only, qfg-6vno.4).</summary>
+    private readonly SseCounters _sseCounters = new();
+
+    /// <summary>
+    /// Internal, test-only: every SSE connect attempt (chaos <c>quonfig_sse_connect_attempts_total</c>).
+    /// </summary>
+    internal long SseConnectAttemptsTotal => _sseCounters.ConnectAttempts;
+
+    /// <summary>
+    /// Internal, test-only: <c>quonfig_sdk_worker_restart_total</c> for <paramref name="layer"/>.
+    /// Layer "1" is the SSE worker (each run that ended and was restarted); layer "2" is the
+    /// supervised fallback poller. Any other layer reads 0.
+    /// </summary>
+    internal long WorkerRestartTotal(string layer) => layer switch
+    {
+        "1" => _sseCounters.WorkerRestarts,
+        "2" => _supervisor?.WorkerRestartTotal("2") ?? 0,
+        _ => 0,
+    };
 
     /// <summary>
     /// Test/diagnostic: the failover-telemetry collector (hedge-fired / guard-rejected / resolved-from

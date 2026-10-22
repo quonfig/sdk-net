@@ -185,6 +185,9 @@ public sealed class FailoverChaosTests
             CollectEvaluationSummaries = false,
             ContextUploadMode = ContextUploadMode.None,
         };
+        // client.sdkLog(level, /re/) counts the lines the SDK wrote, at the level it wrote them.
+        var logs = new ChaosProbe();
+        opts.Logger = new ProbeBridgeLogger(logs);
 
         // Pre-stage chaos events that fire at t=0 so the fault is present before the initial fetch
         // (f01 refused, f02 hang, f03/o03 latency). Remaining events + all restores are scheduled
@@ -195,7 +198,13 @@ public sealed class FailoverChaosTests
         {
             foreach (var ev in run.Chaos)
             {
-                if (ev.Inject is null) continue;
+                if (ev.Inject is null)
+                {
+                    // The failover/ordering rig schedules restores from the inject's own duration; a
+                    // `clear` or `process` step here would otherwise be silently dropped (qfg-6vno.4).
+                    throw new NotSupportedException(
+                        $"failover rig: unsupported chaos step at_ms={ev.AtMs} (only inject is implemented)");
+                }
                 var (apply, restore, restoreAfterMs) = TranslateInject(tp, ev.Inject);
                 if (ev.AtMs <= 0)
                 {
@@ -225,7 +234,8 @@ public sealed class FailoverChaosTests
 
         var client = new Quonfig(opts);
         var probe = new FailoverProbe(client);
-        var evaluator = new FailoverEvaluator(probe);
+        var evaluator = new FailoverEvaluator(probe, logs);
+        var chaosErrors = new System.Collections.Concurrent.ConcurrentQueue<string>();
 
         var bgCts = new CancellationTokenSource();
         var bgTasks = new List<Task>();
@@ -243,7 +253,12 @@ public sealed class FailoverChaosTests
                     catch (OperationCanceledException) { return; }
                 }
                 try { await action().ConfigureAwait(false); }
-                catch (Exception ex) { _out.WriteLine("chaos event failed: " + ex.Message); }
+                catch (Exception ex)
+                {
+                    // A chaos step that did not apply means the scenario did not test what it says.
+                    _out.WriteLine("chaos event failed: " + ex.Message);
+                    chaosErrors.Enqueue($"chaos event at {delayMs}ms failed: {ex.Message}");
+                }
             }));
         }
 
@@ -300,7 +315,7 @@ public sealed class FailoverChaosTests
         }
 
         int pass = 0;
-        var failures = new List<string>();
+        var failures = new List<string>(chaosErrors);
         foreach (var s in states)
         {
             if (s.Passed)
@@ -355,8 +370,8 @@ public sealed class FailoverChaosTests
         {
             return (() => tp.SetEnabledAsync("sse", false), () => tp.SetEnabledAsync("sse", true), sseDown);
         }
-        // Unknown inject — no-op.
-        return (() => Task.CompletedTask, null, null);
+        // An inject this rig does not implement fails the run instead of running as a no-op.
+        throw new NotSupportedException("failover rig: unsupported inject " + Describe(inj));
     }
 
     private static string Describe(ChaosScenario.Inject inj)
@@ -365,7 +380,7 @@ public sealed class FailoverChaosTests
         if (inj.PrimaryHangMs is { } h) return $"primary_hang_ms={h}";
         if (inj.PrimaryLatencyMs is { } l) return $"primary_latency_ms={l}";
         if (inj.SseDownMs is { } s) return $"sse_down_ms={s}";
-        return "?";
+        return "(unrecognized inject" + (string.IsNullOrEmpty(inj.Name) ? "" : " name=" + inj.Name) + ")";
     }
 
     // ----------------------------------------------------------------------------------------
@@ -607,8 +622,9 @@ public sealed class FailoverChaosTests
         private static readonly Regex ReSseFailover = new(@"^client\.sseFailedOverToSecondary\(\)\s*==\s*(true|false)$", RegexOptions.Compiled);
 
         private readonly FailoverProbe _probe;
+        private readonly ChaosProbe _logs;
 
-        public FailoverEvaluator(FailoverProbe probe) { _probe = probe; }
+        public FailoverEvaluator(FailoverProbe probe, ChaosProbe logs) { _probe = probe; _logs = logs; }
 
         public (bool passed, string reason) Evaluate(string expr)
         {
@@ -669,6 +685,11 @@ public sealed class FailoverChaosTests
                 bool want = bool.Parse(m.Groups[1].Value);
                 bool got = _probe.SseFailedOverToSecondary();
                 return (got == want, $"sseFailedOverToSecondary={got} want {want}");
+            }
+            // Exactly the requested level (chaos README); the SDK's own log lines.
+            if (ExpressionEvaluator.TryEvalSdkLog(_logs, expr, out var logOk, out var logReason))
+            {
+                return (logOk, logReason);
             }
             return (false, "unrecognized expression: " + expr);
         }
