@@ -322,7 +322,9 @@ public sealed class QuonfigOptions
     /// SSE / fallback / datadir-watcher refresh). Mirrors sdk-java's <c>onConfigUpdate(Runnable)</c>
     /// and sdk-go's <c>WithOnConfigUpdate</c>: a convenience way to register a config-change
     /// listener at construction. Equivalent to subscribing to the <see cref="Quonfig.OnConfigChange"/>
-    /// event before the first load. Subscribers must not throw.
+    /// event before the first load. Subscribers must not throw. Handlers run after the SDK releases
+    /// its install lock, one at a time, in install order, so a handler may block or trigger work that
+    /// installs config without stalling or deadlocking the SDK.
     /// </summary>
     public Action? OnConfigChange { get; set; }
 

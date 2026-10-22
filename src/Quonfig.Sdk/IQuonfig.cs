@@ -43,7 +43,8 @@ public interface IQuonfig : IAsyncDisposable
 
     /// <summary>
     /// Fires after a new envelope has been installed (initial load and every subsequent SSE /
-    /// fallback / datadir-watcher refresh). Subscribers must not throw. Used by the
+    /// fallback / datadir-watcher refresh). Subscribers must not throw. Handlers run after the SDK
+    /// releases its install lock, one at a time, in install order. Used by the
     /// <c>Quonfig.Sdk.Serilog</c> companion package to re-evaluate <c>LoggingLevelSwitch</c>
     /// values reactively on config changes.
     /// </summary>

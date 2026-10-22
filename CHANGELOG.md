@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Fixed (patch): `OnConfigChange` handlers no longer run while the SDK holds its install lock (qfg-6vno.12).** Before, every network install (initial fetch, refresh / fallback poll, SSE update) fired `OnConfigChange` inside the lock that serializes installs. A slow handler stalled the SSE reader, the fallback poller and every refresh, and a handler that waited on another thread doing an install deadlocked. Handlers now run after the lock is released. They are still serialized and in install order: a change installed while a handler is running is delivered after that handler returns, possibly on the thread that is already delivering. The initial-load handler still fires before `InitAsync()` returns. Getters were never affected. Same fix as sdk-go qfg-eefx.
+
 ## 1.9.0 - 2026-10-21
 
 - **Changed (minor): init failure uses `OnInitFailure.Fail` / `Wait` / `Continue`, retries until `InitTimeout`, and adds a readiness API (qfg-9p4i.10).** **UPGRADE: when delivery is unreachable, `InitAsync()` now retries until `InitTimeout` (10 s by default) before it fails or continues, and throws `QuonfigInitException`; rename `OnInitFailure.Throw` to `Fail` and `ReturnDefaults` to `Continue`.** Spec: `project/plans/2026-10-05-init-failure-design.md`, sections B and C.
