@@ -25,7 +25,7 @@ namespace Quonfig.Sdk.Transport;
 /// <para>The watchdog uses a per-connection <see cref="CancellationTokenSource"/> armed via
 /// <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/>, re-armed on every successful
 /// read. When the CTS fires, a callback disposes the underlying body
-/// <see cref="Stream"/>; the in-flight <see cref="StreamReader.ReadLineAsync()"/> then unblocks
+/// <see cref="Stream"/>; the in-flight line read then unblocks
 /// (surfaces as <see cref="ObjectDisposedException"/> / <see cref="IOException"/>), the read
 /// loop falls through to reconnect with exponential backoff.</para>
 ///
@@ -77,6 +77,13 @@ public sealed class SseClient : IDisposable
     private readonly bool _ownsClient;
     private readonly Random _rng = new();
     private int _maxConnectedStreamIndex = -1;
+
+    // Set when a stream ended because an event passed SizeCaps.MaxSseEventBytes (qfg-6vno.20.6).
+    // The server resends the same oversized snapshot on every connect, so while this is set only
+    // an ENVELOPE counts as a connection's first frame (a keepalive alone does not), the attempt
+    // stays a failed one, and the fallback poller keeps config fresh over HTTP. Cleared by the
+    // first envelope that gets through. Same gate as sdk-go's `oversized`.
+    private int _oversized;
 
     /// <summary>Ordered list of base URLs (primary first).</summary>
     public IReadOnlyList<Uri> StreamUrls => _streamUrls;
@@ -358,25 +365,50 @@ public sealed class SseClient : IDisposable
             // connection that ends before its first frame reports no edge at all and leaves the
             // poller's engage timer running.
             bool firedConnect = false;
+            bool gated = Volatile.Read(ref _oversized) != 0;
             try
             {
-                bool consumed = await ParseStreamAsync(
+                var result = await ParseStreamCoreAsync(
                         body,
                         _onEnvelope,
                         _readTimeout,
                         _logger,
                         () =>
                         {
+                            // Under the oversized gate this fires only for an envelope: the stream
+                            // is usable again and the oversized episode is over.
+                            if (gated) Volatile.Write(ref _oversized, 0);
                             firedConnect = true;
                             FireSafe(_onConnect, "onConnect");
                         },
+                        gated,
                         cancellationToken)
                     .ConfigureAwait(false);
-                if (!consumed && !cancellationToken.IsCancellationRequested)
+                if (result.Oversized)
+                {
+                    // An event over the cap can never be read, and the server resends it on every
+                    // reconnect: a failed attempt (exponential backoff), not a frame. One WARN per
+                    // episode; repeats at DEBUG.
+                    var shown = HttpTransport.Redact(target);
+                    if (Interlocked.Exchange(ref _oversized, 1) == 0)
+                    {
+                        _logger.LogWarning(
+                            "SSE: event from {Target} exceeds the maximum size of {MaxBytes} bytes; dropping it and backing off (fallback polling will take over)",
+                            shown, SizeCaps.MaxSseEventBytes);
+                    }
+                    else
+                    {
+                        _logger.LogDebug(
+                            "SSE: event from {Target} still exceeds the maximum size of {MaxBytes} bytes; backing off",
+                            shown, SizeCaps.MaxSseEventBytes);
+                    }
+                    return false;
+                }
+                if (!result.FrameSeen && !cancellationToken.IsCancellationRequested)
                 {
                     Counters?.RecordOkWithoutFrame();
                 }
-                return consumed;
+                return result.FrameSeen;
             }
             finally
             {
@@ -418,12 +450,13 @@ public sealed class SseClient : IDisposable
     /// <see cref="CancellationTokenSource"/> armed via
     /// <see cref="CancellationTokenSource.CancelAfter(TimeSpan)"/> disposes <paramref name="body"/>
     /// if no bytes arrive within <paramref name="readTimeout"/>; this unblocks
-    /// <see cref="StreamReader.ReadLineAsync()"/> and the method returns. Returns true iff the
+    /// the in-flight read and the method returns. Returns true iff the
     /// stream delivered at least one VALID FRAME (qfg-goi1.10.41): a blank-line-terminated block
     /// that is comment-only (the server keepalive) or whose <c>data:</c> decodes and validates as
     /// a config envelope. Headers alone, a block cut off by EOF, malformed or non-envelope data,
     /// and an <c>id:</c>-only or empty block are not frames. <see cref="RunAsync"/> resets its
-    /// backoff only when this is true.
+    /// backoff only when this is true. An event over 4 MiB (one line, or its joined <c>data:</c>
+    /// lines) is not a frame: reading stops there and the method returns (qfg-6vno.20.6).
     /// </summary>
     public static Task<bool> ParseStreamAsync(
         Stream body,
@@ -447,6 +480,39 @@ public sealed class SseClient : IDisposable
     /// Frame-aware overload: <paramref name="onFirstFrame"/> runs once, at the first valid frame,
     /// before that frame's envelope (if any) reaches <paramref name="onEnvelope"/>.
     /// </summary>
+    internal static async Task<bool> ParseStreamAsync(
+        Stream body,
+        Action<ConfigEnvelope> onEnvelope,
+        TimeSpan readTimeout,
+        ILogger logger,
+        Action? onFirstFrame,
+        CancellationToken cancellationToken)
+        => (await ParseStreamCoreAsync(body, onEnvelope, readTimeout, logger, onFirstFrame, requireEnvelope: false, cancellationToken)
+            .ConfigureAwait(false)).FrameSeen;
+
+    /// <summary>What one connection's parse saw.</summary>
+    internal readonly struct ParseResult
+    {
+        public ParseResult(bool frameSeen, bool oversized)
+        {
+            FrameSeen = frameSeen;
+            Oversized = oversized;
+        }
+
+        /// <summary>The stream delivered at least one valid frame.</summary>
+        public bool FrameSeen { get; }
+
+        /// <summary>The stream ended because an event passed <see cref="SizeCaps.MaxSseEventBytes"/>.</summary>
+        public bool Oversized { get; }
+    }
+
+    /// <summary>
+    /// The parser. <paramref name="requireEnvelope"/> is the oversized gate: when true, a
+    /// comment-only block (keepalive) is not a frame; only a config envelope is. An event over
+    /// <see cref="SizeCaps.MaxSseEventBytes"/> (one line, or the joined <c>data:</c> lines) ends
+    /// the parse at once with <see cref="ParseResult.Oversized"/> set; nothing from it is delivered
+    /// and memory stays bounded near the cap even for a line with no terminator.
+    /// </summary>
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Reliability", "CA2000:Dispose objects before losing scope",
         Justification = "watchdog CTS lifetime is bound to the using statement.")]
@@ -456,12 +522,13 @@ public sealed class SseClient : IDisposable
     [System.Diagnostics.CodeAnalysis.SuppressMessage(
         "Usage", "CA1849:Call async methods when in an async method",
         Justification = "Stream.Dispose in the watchdog callback is intentional — the callback runs on a timer thread, not the awaiter, and the dispose is what unblocks the in-flight read.")]
-    internal static async Task<bool> ParseStreamAsync(
+    internal static async Task<ParseResult> ParseStreamCoreAsync(
         Stream body,
         Action<ConfigEnvelope> onEnvelope,
         TimeSpan readTimeout,
         ILogger logger,
         Action? onFirstFrame,
+        bool requireEnvelope,
         CancellationToken cancellationToken)
     {
 #if NET8_0_OR_GREATER
@@ -522,11 +589,14 @@ public sealed class SseClient : IDisposable
         // where the read already honors the token.
         using var disposeOnCancel = cancellationToken.Register(() => DisposeBody("cancellation"));
 
-        // Leave the underlying stream open so the finally block in the caller is the
-        // single owner of disposal — the watchdog disposes via the registered callback,
-        // not via the reader.
-        using var reader = new StreamReader(body, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 4096, leaveOpen: true);
+        // The reader never owns the body: the caller's finally is the single owner of disposal,
+        // and the watchdog / cancellation dispose it via the registered callbacks. It caps one
+        // line at SizeCaps.MaxSseEventBytes and stops reading there (qfg-6vno.20.6).
+        var reader = new BoundedLineReader(body, SizeCaps.MaxSseEventBytes);
         var dataBuf = new StringBuilder();
+        // UTF-8 bytes of the current event's joined data (newline separators included), capped
+        // at SizeCaps.MaxSseEventBytes like a single line.
+        long dataBytes = 0;
         bool frameSeen = false;
         // Per-block flags, reset at every blank line: a block is a keepalive frame only if it
         // holds at least one comment line and no field line.
@@ -539,31 +609,27 @@ public sealed class SseClient : IDisposable
                 string? line;
                 try
                 {
-#if NET8_0_OR_GREATER
                     line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-#else
-                    line = await reader.ReadLineAsync().ConfigureAwait(false);
-#endif
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
-                    return frameSeen;
+                    return new ParseResult(frameSeen, oversized: false);
                 }
                 catch (ObjectDisposedException)
                 {
                     // Watchdog disposed the body mid-read; or the outer caller closed it.
-                    return frameSeen;
+                    return new ParseResult(frameSeen, oversized: false);
                 }
                 catch (IOException)
                 {
                     // Socket reset, EOF mid-read, dispose-induced. Treat as normal stream end.
-                    return frameSeen;
+                    return new ParseResult(frameSeen, oversized: false);
                 }
 
                 if (line is null)
                 {
-                    // EOF — server closed the stream.
-                    return frameSeen;
+                    // EOF — server closed the stream — or a line passed the cap.
+                    return new ParseResult(frameSeen, reader.Oversized);
                 }
 
                 if (watchdogEnabled && !stallFired)
@@ -576,7 +642,8 @@ public sealed class SseClient : IDisposable
                 if (line.Length == 0)
                 {
                     var envelope = Decode(dataBuf, logger);
-                    bool isFrame = envelope is not null || (sawComment && !sawField);
+                    dataBytes = 0;
+                    bool isFrame = envelope is not null || (!requireEnvelope && sawComment && !sawField);
                     sawComment = false;
                     sawField = false;
                     if (isFrame && !frameSeen)
@@ -599,6 +666,12 @@ public sealed class SseClient : IDisposable
                 string? rest = StripFieldPrefix(line, "data:");
                 if (rest is not null)
                 {
+                    // The field prefix is ASCII, so its char count is its byte count.
+                    dataBytes += (dataBuf.Length > 0 ? 1 : 0) + reader.LastLineBytes - (line.Length - rest.Length);
+                    if (dataBytes > SizeCaps.MaxSseEventBytes)
+                    {
+                        return new ParseResult(frameSeen, oversized: true);
+                    }
                     if (dataBuf.Length > 0) dataBuf.Append('\n');
                     dataBuf.Append(rest);
                 }
@@ -609,7 +682,7 @@ public sealed class SseClient : IDisposable
         {
             disposeOnStall.Dispose();
         }
-        return frameSeen;
+        return new ParseResult(frameSeen, oversized: false);
     }
 
     /// <summary>

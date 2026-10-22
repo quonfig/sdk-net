@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Quonfig.Sdk.Exceptions;
 using Quonfig.Sdk.Wire;
 
@@ -82,6 +84,17 @@ public sealed class HttpTransport : IDisposable
     private readonly object _etagLock = new();
     private readonly string?[] _etags;
 
+    // Per-leg oversized-body episode flags (qfg-6vno.20.6), guarded by _etagLock: the first body
+    // over SizeCaps.MaxConfigBodyBytes from a leg logs one WARN, repeats log DEBUG, and the next
+    // valid 200 from that leg ends the episode.
+    private readonly bool[] _bodyOversized;
+
+    /// <summary>
+    /// Logger for the oversized-body WARN. The surrounding <see cref="Quonfig"/> sets it to the
+    /// client logger; standalone transports log nothing.
+    /// </summary>
+    internal ILogger Logger { get; set; } = NullLogger.Instance;
+
     /// <summary>Ordered list of base URLs (primary first, then secondaries).</summary>
     public IReadOnlyList<Uri> ApiUrls => _apiUrls;
 
@@ -153,6 +166,7 @@ public sealed class HttpTransport : IDisposable
         }
         _apiUrls = list;
         _etags = new string?[list.Count];
+        _bodyOversized = new bool[list.Count];
 
         string creds = "1:" + sdkKey;
         _authHeader = "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(creds));
@@ -233,15 +247,13 @@ public sealed class HttpTransport : IDisposable
                 }
                 if (sc >= 200 && sc < 300)
                 {
-#if NET8_0_OR_GREATER
-                    using var bodyStream = await response.Content.ReadAsStreamAsync(attemptToken).ConfigureAwait(false);
-#else
-                    using var bodyStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-#endif
-                    var envelope = await JsonSerializer
-                        .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: attemptToken)
-                        .ConfigureAwait(false);
-                    if (envelope is null || !envelope.IsWellFormed())
+                    var envelope = await ReadEnvelopeAsync(response, attemptToken).ConfigureAwait(false);
+                    if (envelope is null)
+                    {
+                        lastError = OversizedBody(i, shown);
+                        continue;
+                    }
+                    if (!envelope.IsWellFormed())
                     {
                         // Not a config envelope (null, {}, {"error":..}): a leg error so the next URL
                         // is tried, and its ETag is never stored (qfg-9dxb.3).
@@ -255,6 +267,7 @@ public sealed class HttpTransport : IDisposable
                     {
                         LastETag = responseETag;
                     }
+                    EndOversizedEpisode(i);
                     LastResolvedIndex = i;
                     return envelope;
                 }
@@ -439,15 +452,14 @@ public sealed class HttpTransport : IDisposable
             }
             if (sc >= 200 && sc < 300)
             {
-#if NET8_0_OR_GREATER
-                using var bodyStream = await response.Content.ReadAsStreamAsync(attemptToken).ConfigureAwait(false);
-#else
-                using var bodyStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-#endif
-                var envelope = await JsonSerializer
-                    .DeserializeAsync<ConfigEnvelope>(bodyStream, cancellationToken: attemptToken)
-                    .ConfigureAwait(false);
-                if (envelope is null || !envelope.IsWellFormed())
+                var envelope = await ReadEnvelopeAsync(response, attemptToken).ConfigureAwait(false);
+                if (envelope is null)
+                {
+                    // Over the body cap: a failed leg exactly like a 5xx. Nothing installs and the
+                    // ETag is never stored.
+                    return LegResult.Fail(legIndex, OversizedBody(legIndex, shown), sc);
+                }
+                if (!envelope.IsWellFormed())
                 {
                     // Not a config envelope (null, {}, {"error":..}): a leg error so the hedge fires
                     // the secondary and nothing is installed; the ETag is never stored (qfg-9dxb.3).
@@ -460,6 +472,7 @@ public sealed class HttpTransport : IDisposable
                 {
                     lock (_etagLock) { _etags[legIndex] = responseETag; }
                 }
+                EndOversizedEpisode(legIndex);
                 return LegResult.Ok(legIndex, envelope, responseETag, sc);
             }
             return LegResult.Fail(legIndex, new QuonfigException(FormattableString.Invariant($"HTTP {sc} from {shown}")), sc);
@@ -489,6 +502,69 @@ public sealed class HttpTransport : IDisposable
         {
             response?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Reads a 2xx body as a <see cref="ConfigEnvelope"/> under the body cap
+    /// (<see cref="SizeCaps.MaxConfigBodyBytes"/>, qfg-6vno.20.6). Returns null when the body is
+    /// over the cap: a declared <c>Content-Length</c> over the cap fails before reading anything,
+    /// otherwise reading stops at cap + 1 byte. A body that deserializes to JSON <c>null</c>
+    /// comes back as an envelope with no meta, so it still fails <see cref="ConfigEnvelope.IsWellFormed"/>.
+    /// </summary>
+    private static async Task<ConfigEnvelope?> ReadEnvelopeAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        if (response.Content.Headers.ContentLength is long declared && declared > SizeCaps.MaxConfigBodyBytes)
+        {
+            return null;
+        }
+#if NET8_0_OR_GREATER
+        var bodyStream = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
+#else
+        var bodyStream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+#endif
+        using var capped = new CappedReadStream(bodyStream, SizeCaps.MaxConfigBodyBytes);
+        try
+        {
+            var envelope = await JsonSerializer
+                .DeserializeAsync<ConfigEnvelope>(capped, cancellationToken: token)
+                .ConfigureAwait(false);
+            return envelope ?? new ConfigEnvelope(null, null);
+        }
+        catch (System.IO.IOException) when (capped.Exceeded)
+        {
+            // The cap tripped mid-read.
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The failed-leg error for an over-cap body, logging one WARN per oversized episode on
+    /// <paramref name="legIndex"/> (repeats at DEBUG). Never includes the body.
+    /// </summary>
+    private QuonfigException OversizedBody(int legIndex, string shown)
+    {
+        bool first;
+        lock (_etagLock)
+        {
+            first = !_bodyOversized[legIndex];
+            _bodyOversized[legIndex] = true;
+        }
+        const string Message = "quonfig: config body from {Target} exceeds the maximum size of {MaxBytes} bytes; the fetch failed";
+        if (first)
+        {
+            Logger.LogWarning(Message, shown, SizeCaps.MaxConfigBodyBytes);
+        }
+        else
+        {
+            Logger.LogDebug(Message, shown, SizeCaps.MaxConfigBodyBytes);
+        }
+        return new QuonfigException(FormattableString.Invariant(
+            $"config body from {shown} exceeds the maximum size of {SizeCaps.MaxConfigBodyBytes} bytes"));
+    }
+
+    private void EndOversizedEpisode(int legIndex)
+    {
+        lock (_etagLock) { _bodyOversized[legIndex] = false; }
     }
 
     /// <summary>
