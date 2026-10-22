@@ -58,7 +58,7 @@ public class ChaosProbeHonestyTests
     {
         var probe = new ChaosProbe();
         Assert.Throws<InvalidOperationException>(() => probe.ConnectionState());
-        Assert.Throws<InvalidOperationException>(() => probe.SdkMetric("quonfig_sse_connect_attempts_total", null));
+        Assert.Throws<InvalidOperationException>(() => probe.SdkMetric("quonfig_sse_connect_attempts_total"));
     }
 
     [Fact]
@@ -72,8 +72,8 @@ public class ChaosProbeHonestyTests
         probe.SetClient(client);
         await client.InitAsync();
         await Task.Delay(1500);
-        var attempts = probe.SdkMetric("quonfig_sse_connect_attempts_total", null).Value;
-        var restarts = probe.SdkMetric("quonfig_sdk_worker_restart_total", "1").Value;
+        var attempts = probe.SdkMetric("quonfig_sse_connect_attempts_total").Value;
+        var restarts = probe.SdkMetric("quonfig_sdk_worker_restart_total", "layer", "1").Value;
         Assert.True(attempts >= 3, "attempts=" + attempts);
         Assert.True(restarts >= 3, "restarts=" + restarts);
         Assert.NotEqual("connected", probe.ConnectionState());
@@ -146,10 +146,62 @@ public class ChaosProbeHonestyTests
     public void Deviations_MatchTheirRowsExactly_AndStaleOnesFail()
     {
         const string row = "client.sdkLog('error', /callback|onConfigUpdate/i) >= 1";
-        Assert.NotNull(ChaosDeviations.Find("10 callback throw — user code throws inside onConfigUpdate", row));
-        Assert.Null(ChaosDeviations.Find("01 baseline", row));
+        var list = new[] { new ChaosDeviations.Deviation("10 ", row, "example") };
+        Assert.NotNull(ChaosDeviations.Find("10 callback throw — user code throws inside onConfigUpdate", row, list));
+        Assert.Null(ChaosDeviations.Find("01 baseline", row, list));
         Assert.Throws<InvalidOperationException>(() => ChaosDeviations.AssertAllMatched(
-            "10 callback throw", new[] { new ChaosScenario.Expectation { AssertExpr = "client.processStillAlive() == true" } }));
+            "10 callback throw", new[] { new ChaosScenario.Expectation { AssertExpr = "client.processStillAlive() == true" } }, list));
+    }
+
+    [Fact]
+    public void Scenario10_HasNoDeviationsLeft()
+    {
+        // qfg-6vno.21: sdk-net counts and logs a caught callback throw at Error, so scenario 10's
+        // callback_errors_total and sdkLog('error') rows run for real.
+        Assert.DoesNotContain(ChaosDeviations.All, d => d.ScenarioPrefix.StartsWith("10", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Scenario10Rows_HoldAgainstARealClientWhoseCallbackThrows()
+    {
+        // Scenario 10 exp[0] and exp[3] (ITD v2026.10.22.2), evaluated against a real client
+        // through the same probe and log bridge the chaos runner uses.
+        var probe = new ChaosProbe();
+        await using var client = new Sdk.Quonfig(new QuonfigOptions
+        {
+            SdkKey = "test-backend-key",
+            ApiUrls = new[] { "http://127.0.0.1:1" },
+            StreamUrls = Array.Empty<string>(),
+            InitTimeout = TimeSpan.FromSeconds(5),
+            HttpMessageHandler = new EnvelopeHandler(),
+            Logger = new ProbeBridgeLogger(probe),
+            CollectEvaluationSummaries = false,
+            ContextUploadMode = ContextUploadMode.None,
+            OnConfigChange = () => throw new InvalidOperationException("simulated user-callback panic for chaos scenario 10"),
+        });
+        probe.SetClient(client);
+        await client.InitAsync();
+
+        var ev = new ExpressionEvaluator(probe);
+        var r0 = ev.Evaluate("client.sdkMetric('quonfig_sdk_callback_errors_total', callback='on_config_update') >= 1");
+        Assert.True(r0.Passed, r0.Reason);
+        var r3 = ev.Evaluate("client.sdkLog('error', /callback|onConfigUpdate/i) >= 1");
+        Assert.True(r3.Passed, r3.Reason);
+        var restarts = ev.Evaluate("client.sdkMetric('quonfig_sdk_worker_restart_total') == 0");
+        Assert.True(restarts.Passed, "a callback throw is not a worker restart: " + restarts.Reason);
+    }
+
+    /// <summary>Config fetch answers a valid gen-1 envelope.</summary>
+    private sealed class EnvelopeHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"configs\":[],\"meta\":{\"version\":\"v1\",\"environment\":\"production\",\"generation\":1}}",
+                    Encoding.UTF8,
+                    "application/json"),
+            });
     }
 
     internal static Sdk.Quonfig HeadersOnlyClient() => new(new QuonfigOptions

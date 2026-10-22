@@ -9,7 +9,8 @@ namespace Quonfig.Sdk.Chaos.Tests;
 /// <summary>
 /// What the chaos probe reads from the SDK. Every member is the SDK's own value: a public getter,
 /// an internal test-only hook (<see cref="Sdk.Quonfig.SseConnectAttemptsTotal"/>,
-/// <see cref="Sdk.Quonfig.WorkerRestartTotal"/>, <see cref="Sdk.Quonfig.FallbackPollerActive"/>),
+/// <see cref="Sdk.Quonfig.WorkerRestartTotal"/>, <see cref="Sdk.Quonfig.CallbackErrorsTotal"/>,
+/// <see cref="Sdk.Quonfig.FallbackPollerActive"/>),
 /// or the task the SDK returned from <c>InitAsync</c>. Unit tests substitute a fake; the runner
 /// uses <see cref="ClientView"/>.
 /// </summary>
@@ -20,6 +21,7 @@ internal interface IChaosClientView
     DateTimeOffset? LastSuccessfulRefresh { get; }
     long SseConnectAttemptsTotal { get; }
     long WorkerRestartTotal(string layer);
+    long CallbackErrorsTotal(string callback);
     bool IsReady { get; }
     string? GetString(string key, string defaultValue);
 }
@@ -36,6 +38,7 @@ internal sealed class ClientView : IChaosClientView
     public DateTimeOffset? LastSuccessfulRefresh => _c.LastSuccessfulRefresh;
     public long SseConnectAttemptsTotal => _c.SseConnectAttemptsTotal;
     public long WorkerRestartTotal(string layer) => _c.WorkerRestartTotal(layer);
+    public long CallbackErrorsTotal(string callback) => _c.CallbackErrorsTotal(callback);
     public bool IsReady => _c.IsReady;
     public string? GetString(string key, string defaultValue) => _c.GetString(key, null, defaultValue);
 }
@@ -140,21 +143,23 @@ internal sealed class ChaosProbe
     public long ReadyEventCount() => Interlocked.Read(ref _readyEvents);
 
     /// <summary>
-    /// The SDK's value of the named metric, read through the client's internal test-only hooks.
-    /// <c>Known</c> is false for a metric sdk-net does not expose, so the evaluator fails the
-    /// expectation loudly instead of comparing against a silent 0.
+    /// The SDK's value of the named metric, read through the client's internal test-only hooks,
+    /// optionally narrowed by one label (<c>layer='1'</c>, <c>callback='on_config_update'</c>).
+    /// No label sums every series. <c>Known</c> is false for a metric (or a label of it) sdk-net
+    /// does not expose, so the evaluator fails the expectation loudly instead of comparing
+    /// against a silent 0.
     /// </summary>
-    public (double Value, bool Known) SdkMetric(string name, string? layer)
+    public (double Value, bool Known) SdkMetric(string name, string? labelName = null, string? labelValue = null)
     {
         var c = Client();
-        return name switch
+        return (name, labelName) switch
         {
-            "quonfig_sdk_worker_restart_total" => (layer switch
-            {
-                null => c.WorkerRestartTotal("1") + c.WorkerRestartTotal("2"),
-                _ => c.WorkerRestartTotal(layer),
-            }, true),
-            "quonfig_sse_connect_attempts_total" => (c.SseConnectAttemptsTotal, true),
+            ("quonfig_sdk_worker_restart_total", null) => (c.WorkerRestartTotal("1") + c.WorkerRestartTotal("2"), true),
+            ("quonfig_sdk_worker_restart_total", "layer") => (c.WorkerRestartTotal(labelValue!), true),
+            ("quonfig_sdk_callback_errors_total", null) =>
+                (c.CallbackErrorsTotal("on_config_update") + c.CallbackErrorsTotal("on_connection_state_change"), true),
+            ("quonfig_sdk_callback_errors_total", "callback") => (c.CallbackErrorsTotal(labelValue!), true),
+            ("quonfig_sse_connect_attempts_total", null) => (c.SseConnectAttemptsTotal, true),
             _ => (0, false),
         };
     }

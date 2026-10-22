@@ -74,7 +74,7 @@ internal sealed class ExpressionEvaluator
     private static readonly Regex ReLastRefresh =
         new(@"^client\.lastSuccessfulRefresh\(\)\s*(>=|>|<=|<|==)\s*\(now\(\)\s*-\s*(\d+)\)$", RegexOptions.Compiled);
     private static readonly Regex ReSdkMetric =
-        new(@"^client\.sdkMetric\(\s*'([^']+)'\s*(?:,\s*layer=\s*'([^']+)'\s*)?\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
+        new(@"^client\.sdkMetric\(\s*'([^']+)'\s*(?:,\s*(\w+)=\s*'([^']+)'\s*)?\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
     private static readonly Regex ReServerMetric =
         new(@"^server_metric\(\s*'([^']+)'\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
     private static readonly Regex ReSdkLog =
@@ -226,16 +226,19 @@ internal sealed class ExpressionEvaluator
         if ((m = ReSdkMetric.Match(expr)).Success)
         {
             var metric = m.Groups[1].Value;
-            var layer = m.Groups[2].Success ? m.Groups[2].Value : null;
-            var (got, known) = _probe.SdkMetric(metric, layer);
+            var labelName = m.Groups[2].Success ? m.Groups[2].Value : null;
+            var labelValue = m.Groups[3].Success ? m.Groups[3].Value : null;
+            var (got, known) = _probe.SdkMetric(metric, labelName, labelValue);
             if (!known)
             {
-                return new Result(false, "unknown sdkMetric \"" + metric + "\": the chaos probe does not implement it");
+                return new Result(false, "unknown sdkMetric \"" + metric + "\"" + (labelName is null ? string.Empty : " with label " + labelName)
+                    + ": the chaos probe does not implement it");
             }
-            var want = double.Parse(m.Groups[4].Value, CultureInfo.InvariantCulture);
-            var op = m.Groups[3].Value;
+            var want = double.Parse(m.Groups[5].Value, CultureInfo.InvariantCulture);
+            var op = m.Groups[4].Value;
             var ok = CompareDouble(op, got, want);
-            return new Result(ok, "sdkMetric(" + metric + ",layer=" + (layer ?? "*") + ")=" + got + " " + op + " " + want);
+            var label = labelName is null ? "*" : labelName + "=" + labelValue;
+            return new Result(ok, "sdkMetric(" + metric + "," + label + ")=" + got + " " + op + " " + want);
         }
         if (ReServerMetric.IsMatch(expr))
         {

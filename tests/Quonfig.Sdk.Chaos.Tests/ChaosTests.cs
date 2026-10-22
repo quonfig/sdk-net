@@ -383,8 +383,9 @@ public sealed class ChaosTests
         }
         _out.WriteLine(
             $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped, {chaosErrors.Count} chaos-event errors "
-            + $"(state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1").Value}, "
-            + $"attempts={probe.SdkMetric("quonfig_sse_connect_attempts_total", null).Value}, fallback={probe.FallbackPollerActive()}, "
+            + $"(state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "layer", "1").Value}, "
+            + $"attempts={probe.SdkMetric("quonfig_sse_connect_attempts_total").Value}, "
+            + $"callbackErrors={probe.SdkMetric("quonfig_sdk_callback_errors_total").Value}, fallback={probe.FallbackPollerActive()}, "
             + $"lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
 
         if (failures.Count > 0)

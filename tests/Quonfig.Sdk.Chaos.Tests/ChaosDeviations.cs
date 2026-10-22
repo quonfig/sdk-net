@@ -14,29 +14,18 @@ internal static class ChaosDeviations
 {
     internal sealed record Deviation(string ScenarioPrefix, string Assert, string Reason);
 
-    private const string CallbackReason =
-        "sdk-net's onConfigUpdate is the OnConfigChange event; a throw is caught at the event "
-        + "boundary and logged at Warning, and no worker restarts (qfg-6vno.21)";
+    // Empty since qfg-6vno.21: scenario 10's two rows (callback throw counted in
+    // callback_errors_total and logged at Error) now run for real. Add a row here only with its
+    // reason and owning bead.
+    internal static readonly IReadOnlyList<Deviation> All = Array.Empty<Deviation>();
 
-    internal static readonly IReadOnlyList<Deviation> All = new[]
-    {
-        new Deviation(
-            "10 ",
-            "client.sdkMetric('quonfig_sdk_worker_restart_total', layer='1') >= 1",
-            CallbackReason),
-        new Deviation(
-            "10 ",
-            "client.sdkLog('error', /callback|onConfigUpdate/i) >= 1",
-            CallbackReason),
-    };
-
-    public static Deviation? Find(string? scenarioName, string assertExpr) =>
-        All.FirstOrDefault(d => Applies(d, scenarioName) && d.Assert == (assertExpr ?? string.Empty).Trim());
+    public static Deviation? Find(string? scenarioName, string assertExpr, IReadOnlyList<Deviation>? list = null) =>
+        (list ?? All).FirstOrDefault(d => Applies(d, scenarioName) && d.Assert == (assertExpr ?? string.Empty).Trim());
 
     /// <summary>Throws when a deviation for this scenario matches none of its rows.</summary>
-    public static void AssertAllMatched(string? scenarioName, IReadOnlyList<ChaosScenario.Expectation> rows)
+    public static void AssertAllMatched(string? scenarioName, IReadOnlyList<ChaosScenario.Expectation> rows, IReadOnlyList<Deviation>? list = null)
     {
-        foreach (var d in All.Where(d => Applies(d, scenarioName)))
+        foreach (var d in (list ?? All).Where(d => Applies(d, scenarioName)))
         {
             if (!rows.Any(r => (r.AssertExpr ?? string.Empty).Trim() == d.Assert))
             {
