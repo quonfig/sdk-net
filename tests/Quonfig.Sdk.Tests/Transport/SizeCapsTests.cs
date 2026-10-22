@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -239,6 +240,36 @@ public sealed class SizeCapsTests
         {
             e.Message.Should().NotContain(marker);
         }
+    }
+
+    [Fact]
+    public async Task Test10_4_Non2xxBody_NeverInAnyLogLine()
+    {
+        // The contract asserts no LOG LINE (and no error message) carries the marker. Drive a real
+        // client: init gets v1, then every /api/v2/configs poll and every SSE attempt answers a
+        // non-2xx with a ~2 MiB body that starts with the marker.
+        const string marker = "SIZE-CAPS-MARKER-7f3a";
+        string body = marker + new string('z', 2 * 1024 * 1024);
+        byte[] bodyBytes = Encoding.UTF8.GetBytes(body);
+        using var server = new CapServer(
+            sse: async (_, s, ct) =>
+            {
+                var head = Encoding.ASCII.GetBytes(
+                    "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: " + bodyBytes.Length + "\r\nConnection: close\r\n\r\n");
+                await s.WriteAsync(head, 0, head.Length, ct);
+                await s.WriteAsync(bodyBytes, 0, bodyBytes.Length, ct);
+            },
+            configs: n => n == 1 ? CapServer.Json(Envelope(1, "v1")) : (502, bodyBytes, null, true));
+        var log = new CaptureLogger();
+        await using var rig = await ClientRig.StartAsync(server, log, threshold: TimeSpan.FromMilliseconds(300));
+
+        bool exercised = await WaitForAsync(() => server.ConfigHits >= 4 && server.SseAttempts >= 2, TimeSpan.FromSeconds(15));
+        rig.StopSampler();
+
+        exercised.Should().BeTrue("both the poller and SSE hit the non-2xx path (configs {0}, sse {1})", server.ConfigHits, server.SseAttempts);
+        log.Lines.Should().NotBeEmpty("the failed legs are logged, so the assertion below is not vacuous");
+        log.Lines.Where(l => Regex.IsMatch(l.Message, marker)).Should().BeEmpty();
+        log.Exceptions.Where(e => Regex.IsMatch(e.ToString(), marker)).Should().BeEmpty();
     }
 
     // ---------------------------------------------------------------- Test 10 case 5
