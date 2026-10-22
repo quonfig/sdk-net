@@ -80,6 +80,16 @@ internal sealed class ExpressionEvaluator
     private static readonly Regex ReSdkLog =
         new(@"^client\.sdkLog\(\s*'([^']+)'\s*,\s*/(.+)/i\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
 
+    // Init-failure vocabulary (00-boot-both-down-then-restore, chaos README).
+    private static readonly Regex ReInitState =
+        new(@"^client\.initState\(\)\s*(==|!=)\s*'([^']+)'$", RegexOptions.Compiled);
+    private static readonly Regex ReGetString =
+        new(@"^client\.getString\(\s*'([^']+)'\s*,\s*'([^']*)'\s*\)\s*(==|!=)\s*'([^']*)'$", RegexOptions.Compiled);
+    private static readonly Regex ReReadyEvents =
+        new(@"^client\.readyEventCount\(\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
+    private static readonly Regex ReReady =
+        new(@"^client\.ready\(\)\s*==\s*(true|false)$", RegexOptions.Compiled);
+
     private readonly ChaosProbe _probe;
 
     public ExpressionEvaluator(ChaosProbe probe)
@@ -183,6 +193,35 @@ internal sealed class ExpressionEvaluator
             var op = m.Groups[1].Value;
             var ok = CompareLong(op, lastMs, threshold);
             return new Result(ok, "lastSuccessfulRefresh=" + lastMs + " " + op + " " + threshold);
+        }
+        if ((m = ReInitState.Match(expr)).Success)
+        {
+            var got = _probe.InitState();
+            var want = m.Groups[2].Value;
+            var op = m.Groups[1].Value;
+            var ok = op == "==" ? got == want : got != want;
+            return new Result(ok, "initState=" + got + " " + op + " " + want);
+        }
+        if ((m = ReGetString.Match(expr)).Success)
+        {
+            var got = _probe.GetString(m.Groups[1].Value, m.Groups[2].Value);
+            var want = m.Groups[4].Value;
+            var op = m.Groups[3].Value;
+            var ok = op == "==" ? got == want : got != want;
+            return new Result(ok, "getString(" + m.Groups[1].Value + ")=" + (got ?? "null") + " " + op + " " + want);
+        }
+        if ((m = ReReadyEvents.Match(expr)).Success)
+        {
+            var got = _probe.ReadyEventCount();
+            var want = long.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            var op = m.Groups[1].Value;
+            return new Result(CompareLong(op, got, want), "readyEventCount=" + got + " " + op + " " + want);
+        }
+        if ((m = ReReady.Match(expr)).Success)
+        {
+            var want = bool.Parse(m.Groups[1].Value);
+            var got = _probe.Ready();
+            return new Result(got == want, "ready=" + got + " want " + want);
         }
         if ((m = ReSdkMetric.Match(expr)).Success)
         {

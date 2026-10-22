@@ -114,6 +114,12 @@ public sealed class SseClient : IDisposable
     internal Func<string, TimeSpan, TimeSpan>? WaitHook { get; set; }
 
     /// <summary>
+    /// Internal, test-only Layer 1 counters (connect attempts, worker restarts) for the chaos
+    /// harness (qfg-6vno.4). Null outside a <see cref="Quonfig"/>-owned stream.
+    /// </summary>
+    internal SseCounters? Counters { get; set; }
+
+    /// <summary>
     /// Initializes a new SSE client. Lifecycle is driven by <see cref="RunAsync"/>; the
     /// caller passes the cancellation token used to stop the loop.
     /// </summary>
@@ -243,6 +249,9 @@ public sealed class SseClient : IDisposable
             // grows the backoff exactly like a connect error (qfg-goi1.10.41).
             bool consumed = await ConnectOnceAsync(0, cancellationToken).ConfigureAwait(false);
             if (cancellationToken.IsCancellationRequested) return;
+            // The worker run ended (stream drop, or an attempt that failed before its first frame)
+            // and the loop is about to restart it.
+            Counters?.RecordWorkerRestart();
             if (consumed)
             {
                 // The connection delivered a frame — reset the long-tail backoff before
@@ -274,6 +283,7 @@ public sealed class SseClient : IDisposable
         Justification = "body.Dispose in the finally is fine — body is fully drained or watchdog-disposed by this point.")]
     private async Task<bool> ConnectOnceAsync(int urlIndex, CancellationToken cancellationToken)
     {
+        Counters?.RecordConnectAttempt();
         var target = AppendPath(_streamUrls[urlIndex], SsePath);
         using var request = new HttpRequestMessage(HttpMethod.Get, target);
         request.Headers.TryAddWithoutValidation("Authorization", _authHeader);

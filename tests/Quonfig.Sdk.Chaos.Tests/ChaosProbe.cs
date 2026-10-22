@@ -2,226 +2,164 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Quonfig.Sdk.Chaos.Tests;
 
 /// <summary>
-/// Test-only probe over a sdk-net <see cref="Sdk.Quonfig"/> client. Derives the observation
-/// surface the chaos scenarios reference (<c>connectionState</c>, <c>worker_restart_total</c>,
-/// <c>lastSuccessfulRefresh</c>, <c>fallbackPollerActive</c>) from existing SDK callbacks plus
-/// log scraping via <see cref="ProbeBridgeLogger"/>. Mirrors sdk-java's <c>ChaosProbe</c>.
+/// What the chaos probe reads from the SDK. Every member is the SDK's own value: a public getter,
+/// an internal test-only hook (<see cref="Sdk.Quonfig.SseConnectAttemptsTotal"/>,
+/// <see cref="Sdk.Quonfig.WorkerRestartTotal"/>, <see cref="Sdk.Quonfig.FallbackPollerActive"/>),
+/// or the task the SDK returned from <c>InitAsync</c>. Unit tests substitute a fake; the runner
+/// uses <see cref="ClientView"/>.
+/// </summary>
+internal interface IChaosClientView
+{
+    Sdk.ConnectionState ConnectionState { get; }
+    bool FallbackPollerActive { get; }
+    DateTimeOffset? LastSuccessfulRefresh { get; }
+    long SseConnectAttemptsTotal { get; }
+    long WorkerRestartTotal(string layer);
+    bool IsReady { get; }
+    string? GetString(string key, string defaultValue);
+}
+
+/// <summary><see cref="IChaosClientView"/> over a live sdk-net client.</summary>
+internal sealed class ClientView : IChaosClientView
+{
+    private readonly Sdk.Quonfig _c;
+
+    public ClientView(Sdk.Quonfig client) { _c = client ?? throw new ArgumentNullException(nameof(client)); }
+
+    public Sdk.ConnectionState ConnectionState => _c.ConnectionState;
+    public bool FallbackPollerActive => _c.FallbackPollerActive;
+    public DateTimeOffset? LastSuccessfulRefresh => _c.LastSuccessfulRefresh;
+    public long SseConnectAttemptsTotal => _c.SseConnectAttemptsTotal;
+    public long WorkerRestartTotal(string layer) => _c.WorkerRestartTotal(layer);
+    public bool IsReady => _c.IsReady;
+    public string? GetString(string key, string defaultValue) => _c.GetString(key, null, defaultValue);
+}
+
+/// <summary>
+/// Test-only probe over a sdk-net client: the observation surface the chaos scenarios reference
+/// (<c>connectionState</c>, <c>sdkMetric</c>, <c>lastSuccessfulRefresh</c>,
+/// <c>fallbackPollerActive</c>, <c>sdkLog</c>, the init-failure vocabulary).
 ///
-/// <para>The probe does NOT add metrics to the SDK itself — the missing observability is the
-/// point of the harness. Scenarios that depend on signals sdk-net doesn't expose today either
-/// pass via the log-based proxy here, or get a bead filed.</para>
+/// <para>qfg-6vno.4: the probe keeps no bookkeeping of its own for any value it reports. States and
+/// metrics come from the SDK through <see cref="IChaosClientView"/>; log counts come from the lines
+/// the SDK wrote through its <c>ILogger</c>; <c>readyEventCount</c> counts the SDK's own
+/// <c>OnConfigChange</c> events. Before a client is attached every read fails loudly, so a
+/// scenario can never pass on a default.</para>
 /// </summary>
 internal sealed class ChaosProbe
 {
-    /// <summary>
-    /// Connection state vocabulary from supervisor-test-contract.md. sdk-net's enum lacks
-    /// <c>reconnecting</c> (it stays Connected until the fallback engages), so the probe maps
-    /// SDK state transitions onto this richer vocabulary using SSE state edges.
-    /// </summary>
-    public enum State
-    {
-        Initializing,
-        Connected,
-        Reconnecting,
-        FallingBack,
-        Disconnected,
-    }
-
-    private static string Text(State s) => s switch
-    {
-        State.Initializing => "initializing",
-        State.Connected => "connected",
-        State.Reconnecting => "reconnecting",
-        State.FallingBack => "falling_back",
-        _ => "disconnected",
-    };
-
     private readonly object _lock = new();
-    private Sdk.Quonfig? _client;
-    private State _state = State.Initializing;
-    private DateTime? _lastRefreshUtc;
-    private long _restartLayer1;
-    private long _restartLayer2;
-    private long _connAttempts; // count of (any) transition into connected, as sdk-go's probe
-    private bool _fallbackActive;
-    private int _processCrashed; // 0 == still alive
+    private IChaosClientView? _client;
+    private Task? _init;
+    private long _readyEvents;
+    private int _unobservedFaults;
     private readonly List<LogLine> _logs = new();
 
+    /// <summary>Wires the probe to the client every getter reads from.</summary>
+    public void SetClient(IChaosClientView client)
+    {
+        lock (_lock) { _client = client ?? throw new ArgumentNullException(nameof(client)); }
+    }
+
+    public void SetClient(Sdk.Quonfig client) => SetClient(new ClientView(client));
+
+    /// <summary>The task <c>InitAsync</c> returned; <see cref="InitState"/> reads its status.</summary>
+    public void SetInitTask(Task init)
+    {
+        lock (_lock) { _init = init ?? throw new ArgumentNullException(nameof(init)); }
+    }
+
+    private IChaosClientView Client()
+    {
+        lock (_lock)
+        {
+            return _client ?? throw new InvalidOperationException("chaos probe read before a client was attached");
+        }
+    }
+
     /// <summary>
-    /// Wires the probe to a live client so <see cref="ConnectionState()"/>,
-    /// <see cref="FallbackPollerActive"/>, and <see cref="LastSuccessfulRefreshUtc"/> read the
-    /// SDK's real accessors instead of replaying event edges. Mirrors sdk-go's probe
-    /// (qfg-47c2.20): the client-read path is what lets scenario 05 observe the honest
-    /// <c>LastSuccessfulRefresh</c> stamping semantics (qfg-41nh.8 — stamp per answered leg
-    /// including 304/same-gen; no stamp on guard-rejected installs). Event-derived fields remain
-    /// the fallback when client construction failed.
+    /// The SDK's <see cref="Sdk.ConnectionState"/> in the supervisor-contract vocabulary
+    /// (<c>initializing | connected | disconnected | falling_back</c>). A one-to-one rename; the
+    /// probe never invents a state the contract forbids (no <c>reconnecting</c>).
     /// </summary>
-    public void SetClient(Sdk.Quonfig client)
+    public string ConnectionState() => Client().ConnectionState switch
     {
-        lock (_lock) { _client = client; }
-    }
+        Sdk.ConnectionState.Initializing => "initializing",
+        Sdk.ConnectionState.Connected => "connected",
+        Sdk.ConnectionState.Disconnected => "disconnected",
+        Sdk.ConnectionState.FallingBack => "falling_back",
+        var other => throw new InvalidOperationException("unmapped sdk-net ConnectionState " + other),
+    };
 
-    private Sdk.Quonfig? ClientRef()
-    {
-        lock (_lock) { return _client; }
-    }
+    /// <summary>The fallback poller's own engaged flag (internal SDK hook).</summary>
+    public bool FallbackPollerActive() => Client().FallbackPollerActive;
 
-    /// <summary>Current state as a snake_case string the YAML grammar uses.</summary>
-    public string ConnectionState()
-    {
-        var c = ClientRef();
-        if (c is not null)
-        {
-            // Same vocabulary mapping as OnConnectionState below: sdk-net's Disconnected is the
-            // Layer 1 gap-between-attempts, which the chaos grammar calls "reconnecting".
-            return c.ConnectionState switch
-            {
-                Sdk.ConnectionState.Connected => Text(State.Connected),
-                Sdk.ConnectionState.FallingBack => Text(State.FallingBack),
-                Sdk.ConnectionState.Disconnected => Text(State.Reconnecting),
-                _ => Text(State.Initializing),
-            };
-        }
-        lock (_lock) { return Text(_state); }
-    }
+    public DateTime? LastSuccessfulRefreshUtc() => Client().LastSuccessfulRefresh?.UtcDateTime;
 
-    public bool FallbackPollerActive()
-    {
-        var c = ClientRef();
-        if (c is not null)
-        {
-            // sdk-net has no dedicated poller accessor; FallingBack is the supervisor's "Layer 2
-            // engaged" state, so it is the poller-active signal (see ConnectionState.cs docs).
-            return c.ConnectionState == Sdk.ConnectionState.FallingBack;
-        }
-        lock (_lock) { return _fallbackActive; }
-    }
+    public bool Ready() => Client().IsReady;
 
-    public DateTime? LastSuccessfulRefreshUtc()
-    {
-        var c = ClientRef();
-        if (c is not null)
-        {
-            return c.LastSuccessfulRefresh?.UtcDateTime;
-        }
-        lock (_lock) { return _lastRefreshUtc; }
-    }
-
-    public bool ProcessStillAlive() => Volatile.Read(ref _processCrashed) == 0;
-
-    public void MarkProcessCrashed() => Volatile.Write(ref _processCrashed, 1);
+    public string? GetString(string key, string defaultValue) => Client().GetString(key, defaultValue);
 
     /// <summary>
-    /// Returns the probe's count of the named SDK metric. For
-    /// <c>quonfig_sdk_worker_restart_total</c>, layer "1" tracks SSE worker restarts and layer "2"
-    /// tracks Layer 2 fallback poller restarts. <c>quonfig_sse_connect_attempts_total</c> counts
-    /// every transition into connected, as sdk-go's probe does. <c>Known</c> is false for a metric name
-    /// the probe does not implement, so the evaluator fails the expectation loudly instead of
-    /// comparing against a silent 0.
+    /// The runner's process stayed up and no SDK task faulted unobserved. The chaos runner runs
+    /// the SDK in-process, so a crash that takes the process down fails the run outright; the
+    /// observable in-process signal is an unobserved task fault, recorded via
+    /// <see cref="RecordUnobservedFault"/>.
+    /// </summary>
+    public bool ProcessStillAlive() => Volatile.Read(ref _unobservedFaults) == 0;
+
+    public void RecordUnobservedFault() => Interlocked.Increment(ref _unobservedFaults);
+
+    /// <summary>
+    /// <c>'pending'</c> while the task <c>InitAsync</c> returned is running, <c>'returned'</c> once it
+    /// completed, <c>'raised'</c> once it faulted. Reads the SDK's task, not a runner flag.
+    /// </summary>
+    public string InitState()
+    {
+        Task? t;
+        lock (_lock) { t = _init; }
+        if (t is null) throw new InvalidOperationException("client.initState() read but the scenario made no init call");
+        if (!t.IsCompleted) return "pending";
+        return t.Status == TaskStatus.RanToCompletion ? "returned" : "raised";
+    }
+
+    /// <summary>Called from the SDK's <c>OnConfigChange</c> event.</summary>
+    public void OnConfigChange()
+    {
+        Task? t;
+        lock (_lock) { t = _init; }
+        // readyEventCount counts events fired AFTER the init call returned (chaos README).
+        if (t is not null && t.IsCompleted) Interlocked.Increment(ref _readyEvents);
+    }
+
+    public long ReadyEventCount() => Interlocked.Read(ref _readyEvents);
+
+    /// <summary>
+    /// The SDK's value of the named metric, read through the client's internal test-only hooks.
+    /// <c>Known</c> is false for a metric sdk-net does not expose, so the evaluator fails the
+    /// expectation loudly instead of comparing against a silent 0.
     /// </summary>
     public (double Value, bool Known) SdkMetric(string name, string? layer)
     {
-        lock (_lock)
+        var c = Client();
+        return name switch
         {
-            return name switch
+            "quonfig_sdk_worker_restart_total" => (layer switch
             {
-                "quonfig_sdk_worker_restart_total" => (layer switch
-                {
-                    "1" => _restartLayer1,
-                    "2" => _restartLayer2,
-                    _ => _restartLayer1 + _restartLayer2,
-                }, true),
-                "quonfig_sse_connect_attempts_total" => (_connAttempts, true),
-                _ => (0, false),
-            };
-        }
+                null => c.WorkerRestartTotal("1") + c.WorkerRestartTotal("2"),
+                _ => c.WorkerRestartTotal(layer),
+            }, true),
+            "quonfig_sse_connect_attempts_total" => (c.SseConnectAttemptsTotal, true),
+            _ => (0, false),
+        };
     }
 
-    /// <summary>
-    /// Called by the connection-state event handler on every transition. Maps sdk-net's
-    /// <see cref="Sdk.ConnectionState"/> onto the chaos-grammar vocabulary. Now that
-    /// <see cref="Sdk.Transport.SseClient"/> fires <c>onDisconnect</c> on every stream-end
-    /// (qfg-zp7i.20), each <see cref="Sdk.ConnectionState.Disconnected"/> edge counts as a
-    /// Layer 1 worker restart so the chaos metric assertions can observe short flaps that
-    /// never emit a log line.
-    /// </summary>
-    public void OnConnectionState(Sdk.ConnectionState next)
-    {
-        lock (_lock)
-        {
-            switch (next)
-            {
-                case Sdk.ConnectionState.Connected:
-                    _state = State.Connected;
-                    _fallbackActive = false;
-                    _connAttempts++;
-                    break;
-                case Sdk.ConnectionState.FallingBack:
-                    _state = State.FallingBack;
-                    _fallbackActive = true;
-                    break;
-                case Sdk.ConnectionState.Disconnected:
-                    // SSE Layer 1 is between attempts — use the chaos-grammar
-                    // "reconnecting" state (sdk-net's Disconnected matches Layer 1
-                    // gap-between-attempts, not "everything broken"). Count this as
-                    // a Layer 1 worker restart; the SDK no longer needs log-scraping
-                    // to surface short SSE blips.
-                    _state = State.Reconnecting;
-                    _restartLayer1++;
-                    break;
-                case Sdk.ConnectionState.Initializing:
-                default:
-                    _state = State.Initializing;
-                    break;
-            }
-        }
-    }
-
-    /// <summary>Records a new envelope install (called by the chaos runner's poll loop).</summary>
-    public void RecordRefresh(DateTime utc)
-    {
-        lock (_lock) { _lastRefreshUtc = utc; }
-    }
-
-    /// <summary>
-    /// Records a Layer 1 worker restart event without changing the connection state. Use this
-    /// for callback-throw recoveries (the SSE worker never actually disconnected). For real
-    /// SSE drops use <see cref="RecordSseDrop"/>.
-    /// </summary>
-    public void IncRestartLayer1()
-    {
-        lock (_lock) { _restartLayer1++; }
-    }
-
-    /// <summary>
-    /// Records an SSE drop: increments the layer-1 restart counter AND moves connection state to
-    /// <c>reconnecting</c> until the next SDK edge restores it. The probe infers SSE drops from
-    /// log messages emitted by <see cref="Sdk.Transport.SseClient"/> because sdk-net does not
-    /// expose an SSE connection-state callback today (gap tracked separately).
-    /// </summary>
-    public void RecordSseDrop()
-    {
-        lock (_lock)
-        {
-            _restartLayer1++;
-            if (_state == State.Connected || _state == State.Initializing)
-            {
-                _state = State.Reconnecting;
-            }
-        }
-    }
-
-    /// <summary>Records a Layer 2 fallback-poller restart (rare — Layer 2 catches its own exceptions).</summary>
-    public void IncRestartLayer2()
-    {
-        lock (_lock) { _restartLayer2++; }
-    }
-
-    /// <summary>Records a log line; called by <see cref="ProbeBridgeLogger"/>.</summary>
+    /// <summary>Records a log line the SDK wrote; called by <see cref="ProbeBridgeLogger"/>.</summary>
     public void Log(string level, string message)
     {
         lock (_lock)
@@ -231,31 +169,21 @@ internal sealed class ChaosProbe
     }
 
     /// <summary>
-    /// Count of log lines matching <paramref name="level"/> (case-insensitive; empty matches any
-    /// level) and <paramref name="re"/> (null matches any message).
-    ///
-    /// <para>The level filter is "at least as severe" rather than strict-equal so e.g. an
-    /// assertion of <c>sdkLog('error', ...)</c> matches both Error/Critical and Warning lines.
-    /// sdk-net logs caught callback exceptions at Warning (the SDK recovered, not a hard
-    /// failure); strict equality would mark scenario 10's literal expectation red even though
-    /// the diagnostic the assertion is checking for did get written. Stricter SDKs (sdk-java)
-    /// happen to log at Error here, but the chaos contract is about "was the failure
-    /// observable?", not "was it logged at exactly this severity?".</para>
+    /// Count of SDK log lines at exactly <paramref name="level"/> (chaos README: "how many SDK log
+    /// lines at exactly <c>level</c> match <c>re</c>") whose message matches <paramref name="re"/>.
+    /// Level names are compared by severity, so <c>'warn'</c> matches Microsoft's
+    /// <c>Warning</c>; an unknown level name throws.
     /// </summary>
-    public int SdkLogMatches(string? level, Regex? re)
+    public int SdkLogMatches(string level, Regex? re)
     {
+        int want = LevelSeverity(level);
+        if (want < 0) throw new ArgumentException("unknown sdkLog level '" + level + "'", nameof(level));
         lock (_lock)
         {
-            // Floor is one severity below the requested level so e.g. an 'error' assertion
-            // matches Warning lines too. A request for 'warning' matches Info-and-above, etc.
-            int floor = string.IsNullOrEmpty(level) ? -1 : Math.Max(0, LevelSeverity(level) - 1);
             int n = 0;
             foreach (var line in _logs)
             {
-                if (floor >= 0 && LevelSeverity(line.Level) < floor)
-                {
-                    continue;
-                }
+                if (LevelSeverity(line.Level) != want) continue;
                 if (re is null || re.IsMatch(line.Message)) n++;
             }
             return n;
@@ -264,14 +192,14 @@ internal sealed class ChaosProbe
 
     private static int LevelSeverity(string? level) => level?.ToLowerInvariant() switch
     {
-        // Higher == more severe. Matches Microsoft.Extensions.Logging ordering.
+        // Microsoft.Extensions.Logging ordering.
         "trace" => 0,
         "debug" => 1,
         "information" or "info" => 2,
         "warning" or "warn" => 3,
         "error" => 4,
         "critical" or "fatal" => 5,
-        _ => -1, // unknown / empty — no severity floor.
+        _ => -1,
     };
 
     private readonly struct LogLine

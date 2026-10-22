@@ -141,9 +141,16 @@ public sealed class ChaosTests
         var probe = new ChaosProbe();
         var evaluator = new ExpressionEvaluator(probe);
         var logger = new ProbeBridgeLogger(probe);
+        var rig = new InjectContext(tp, ssePort, sdkKey);
 
         var httpBase = "http://127.0.0.1:" + httpPort;
         var sseBase = "http://127.0.0.1:" + ssePort;
+
+        bool throwInCallback = "throw".Equals(run.Setup?.UserCallback, StringComparison.Ordinal);
+        if (!string.IsNullOrEmpty(run.Setup?.UserCallback) && !throwInCallback)
+        {
+            throw new NotSupportedException($"unsupported setup.user_callback \"{run.Setup!.UserCallback}\"");
+        }
 
         var opts = new QuonfigOptions
         {
@@ -160,8 +167,7 @@ public sealed class ChaosTests
             // latency to the SSE leg, which opens a ~6s gap between heartbeats once the toxic
             // lands, and a 5s watchdog fired on it (a false Layer 1 restart, observed once the
             // qfg-goi1.7 holds made 03 check its whole window). 02 (stall at 5s, restart within
-            // 95s) stays reachable; 07's half-open restart comes from the dropped connection
-            // (~5s), not the watchdog.
+            // 95s) stays reachable.
             SseReadTimeout = TimeSpan.FromSeconds(10),
             Logger = logger,
             // Layer 2 engage delay stays at the cross-SDK default (120s) — scenario 05's
@@ -171,100 +177,116 @@ public sealed class ChaosTests
             // (production) telemetry endpoint during a chaos run.
             CollectEvaluationSummaries = false,
             ContextUploadMode = ContextUploadMode.None,
+            // OnConfigChange is sdk-net's onConfigUpdate: readyEventCount counts it, and scenario
+            // 10's user callback throws from it. Subscribed via the option so the first install
+            // fires it.
+            OnConfigChange = () =>
+            {
+                probe.OnConfigChange();
+                if (throwInCallback)
+                {
+                    throw new InvalidOperationException("simulated user-callback panic for chaos scenario 10");
+                }
+            },
         };
 
-        // Scenario 10 — user callback throws. sdk-net has no OnConfigUpdate callback; the closest
-        // equivalent is OnConnectionStateChange, which fires when the SDK transitions through
-        // Initializing → Connected on the first envelope install. The handler throw is caught by
-        // the SDK and logged as a warning containing "OnConnectionStateChange handler threw"
-        // (and our injected "user-callback panic" message). The ProbeBridgeLogger counts that
-        // as a Layer 1 restart signal so the metric assertion fires.
-        Sdk.Quonfig? client = null;
-        Action<Sdk.ConnectionState>? stateHandler = null;
-        try
+        // Init-failure scenarios (00-*): the SDK's onInitFailure + initTimeout, and t=0 BEFORE the
+        // init call (chaos README "Timeline rules" 2).
+        bool initMode = !string.IsNullOrEmpty(run.Setup?.OnInitFailure);
+        if (initMode)
         {
-            client = new Sdk.Quonfig(opts);
-            // Client-read probing (mirrors sdk-go qfg-47c2.20): connectionState /
-            // fallbackPollerActive / lastSuccessfulRefresh come off the live client, so
-            // scenario 05's freshness assertion observes the SDK's real stamping semantics
-            // (qfg-41nh.8) rather than a probe-side simulation. The state handler below still
-            // feeds the event-derived fallback fields and the Layer 1 restart counter.
-            probe.SetClient(client);
-
-            stateHandler = state =>
+            opts.OnInitFailure = run.Setup!.OnInitFailure switch
             {
-                probe.OnConnectionState(state);
-                if (state == Sdk.ConnectionState.Connected)
-                {
-                    probe.RecordRefresh(DateTime.UtcNow);
-                }
-                if ("throw".Equals(run.Setup?.UserCallback, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        "simulated user-callback panic for chaos scenario 10");
-                }
+                "fail" => OnInitFailure.Fail,
+                "wait" => OnInitFailure.Wait,
+                "continue" => OnInitFailure.Continue,
+                var other => throw new NotSupportedException($"unsupported setup.on_init_failure \"{other}\""),
             };
-            client.OnConnectionStateChange += stateHandler;
+            if (run.Setup.InitTimeoutMs is { } ms) opts.InitTimeout = TimeSpan.FromMilliseconds(ms);
         }
-        catch (Exception ex)
+
+        var injections = new ConcurrentDictionary<string, InjectionState>(StringComparer.Ordinal);
+        var chaosErrors = new ConcurrentQueue<string>();
+        var baseline = DateTime.UtcNow;
+
+        // Pre-init injects (at_ms <= 0) are applied before the first fetch (Timeline rule 2).
+        var later = new List<ChaosScenario.Event>();
+        foreach (var ev in run.Chaos ?? new List<ChaosScenario.Event>())
         {
-            _out.WriteLine("client construction failed: " + ex.Message);
-            probe.Log("error", ex.Message);
+            if (ev.AtMs <= 0 && ev.Inject is not null)
+            {
+                await FireEventAsync(rig, ev, injections, CancellationToken.None);
+                _out.WriteLine($"[     0ms] inject {DescribeInject(ev.Inject)} (pre-init)");
+            }
+            else
+            {
+                later.Add(ev);
+            }
         }
+
+        // A client that cannot be constructed fails the scenario: there is nothing to observe.
+        var client = new Sdk.Quonfig(opts);
+        probe.SetClient(client);
+        Task? initTask = null;
+        if (initMode)
+        {
+            // The init call runs on its own task so the tick loop keeps sampling while it blocks;
+            // client.initState() reads that task's status. catch_init_failure: the runner observes
+            // the raise and keeps the client.
+            initTask = Task.Run(() => client.InitAsync());
+            probe.SetInitTask(initTask);
+        }
+        else
+        {
+            // Background-fetching constructor: t=0 at or right after it.
+            baseline = DateTime.UtcNow;
+        }
+
+        // processStillAlive(): an SDK task that faults unobserved is the in-process crash signal.
+        EventHandler<UnobservedTaskExceptionEventArgs> onUnobserved = (_, e) =>
+        {
+            if (e.Exception?.ToString().Contains("Quonfig.Sdk.", StringComparison.Ordinal) == true)
+            {
+                probe.RecordUnobservedFault();
+            }
+        };
+        TaskScheduler.UnobservedTaskException += onUnobserved;
 
         // Schedule chaos events.
-        var baseline = DateTime.UtcNow;
-        var injections = new ConcurrentDictionary<string, InjectionState>(StringComparer.Ordinal);
         var chaosTasks = new List<Task>();
         var chaosCts = new CancellationTokenSource();
-        if (run.Chaos is not null)
+        foreach (var ev in later)
         {
-            foreach (var ev in run.Chaos)
+            var captured = ev;
+            chaosTasks.Add(Task.Run(async () =>
             {
-                var captured = ev;
-                chaosTasks.Add(Task.Run(async () =>
+                var fireAt = baseline + TimeSpan.FromMilliseconds(captured.AtMs);
+                var delay = fireAt - DateTime.UtcNow;
+                if (delay > TimeSpan.Zero)
                 {
-                    var fireAt = baseline + TimeSpan.FromMilliseconds(captured.AtMs);
-                    var delay = fireAt - DateTime.UtcNow;
-                    if (delay > TimeSpan.Zero)
-                    {
-                        try
-                        {
-                            await Task.Delay(delay, chaosCts.Token);
-                        }
-                        catch (OperationCanceledException) { return; }
-                    }
                     try
                     {
-                        if (captured.Inject is not null)
-                        {
-                            var st = await ApplyInjectAsync(tp, captured.Inject);
-                            if (!string.IsNullOrEmpty(captured.Inject.Name) && st is not null)
-                            {
-                                injections[captured.Inject.Name!] = st;
-                            }
-                            _out.WriteLine($"[{captured.AtMs,6}ms] inject {DescribeInject(captured.Inject)}");
-                        }
-                        else if (!string.IsNullOrEmpty(captured.Clear))
-                        {
-                            if (injections.TryRemove(captured.Clear!, out var st))
-                            {
-                                await ClearInjectAsync(tp, st);
-                            }
-                            _out.WriteLine($"[{captured.AtMs,6}ms] clear {captured.Clear}");
-                        }
-                        else if (captured.Process is not null)
-                        {
-                            await ApplyProcessAsync(tp, captured.Process, chaosCts.Token);
-                            _out.WriteLine($"[{captured.AtMs,6}ms] process {captured.Process.Action}/{captured.Process.Count}");
-                        }
+                        await Task.Delay(delay, chaosCts.Token);
                     }
-                    catch (Exception cex)
-                    {
-                        _out.WriteLine($"[{captured.AtMs,6}ms] chaos event failed: {cex.Message}");
-                    }
-                }, chaosCts.Token));
-            }
+                    catch (OperationCanceledException) { return; }
+                }
+                try
+                {
+                    await FireEventAsync(rig, captured, injections, chaosCts.Token);
+                    _out.WriteLine($"[{captured.AtMs,6}ms] {DescribeEvent(captured)}");
+                }
+                catch (OperationCanceledException) when (chaosCts.IsCancellationRequested)
+                {
+                    // Scenario over.
+                }
+                catch (Exception cex)
+                {
+                    // A chaos step that did not apply means the scenario did not test what it
+                    // says: fail the run (qfg-6vno.4), never continue as a silent no-op.
+                    _out.WriteLine($"[{captured.AtMs,6}ms] chaos event failed: {cex.Message}");
+                    chaosErrors.Enqueue($"chaos event at {captured.AtMs}ms ({DescribeEvent(captured)}) failed: {cex.Message}");
+                }
+            }, chaosCts.Token));
         }
 
         var wallClockS = run.Setup?.WallClockSeconds > 0 ? run.Setup.WallClockSeconds : 30;
@@ -277,8 +299,16 @@ public sealed class ChaosTests
         var states = new List<ExpState>();
         for (int i = 0; i < run.Expectations.Count; i++)
         {
-            states.Add(new ExpState(i, run.Expectations[i]));
+            var st = new ExpState(i, run.Expectations[i]);
+            if (ChaosDeviations.Find(run.Name, run.Expectations[i].AssertExpr) is { } dev)
+            {
+                // A documented sdk-net deviation: reported SKIPPED with its reason, never PASS.
+                st.Timeline.Skipped = true;
+                st.SkippedLeaves = new[] { new ExpressionEvaluator.SkipNote(dev.Assert, "DEVIATION: " + dev.Reason) };
+            }
+            states.Add(st);
         }
+        ChaosDeviations.AssertAllMatched(run.Name, run.Expectations);
 
         try
         {
@@ -305,21 +335,21 @@ public sealed class ChaosTests
         finally
         {
             chaosCts.Cancel();
-            try { await Task.WhenAll(chaosTasks); } catch { /* best-effort */ }
+            try { await Task.WhenAll(chaosTasks); } catch { /* errors were recorded per event */ }
             chaosCts.Dispose();
-            if (client is not null)
+            try { await client.CloseAsync(); }
+            catch (Exception cex) { _out.WriteLine("close failed: " + cex.Message); }
+            if (initTask is not null)
             {
-                if (stateHandler is not null)
-                {
-                    client.OnConnectionStateChange -= stateHandler;
-                }
-                try { await client.CloseAsync(); }
-                catch (Exception cex) { _out.WriteLine("close failed: " + cex.Message); }
+                // Observe the init outcome so a raised init is not reported later as an unobserved fault.
+                try { await initTask; }
+                catch (Exception iex) { _out.WriteLine("init call raised: " + iex.GetType().Name + ": " + iex.Message); }
             }
+            TaskScheduler.UnobservedTaskException -= onUnobserved;
         }
 
         int pass = 0, fail = 0, skipped = 0;
-        var failures = new List<string>();
+        var failures = new List<string>(chaosErrors);
         var skipLog = ChaosSkipLog.FromEnvironment();
         foreach (var s in states)
         {
@@ -351,19 +381,74 @@ public sealed class ChaosTests
             }
         }
         _out.WriteLine(
-            $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped (state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1").Value}, fallback={probe.FallbackPollerActive()}, lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
+            $"scenario summary: {pass} passed, {fail} failed, {skipped} skipped, {chaosErrors.Count} chaos-event errors "
+            + $"(state={probe.ConnectionState()}, restartL1={probe.SdkMetric("quonfig_sdk_worker_restart_total", "1").Value}, "
+            + $"attempts={probe.SdkMetric("quonfig_sse_connect_attempts_total", null).Value}, fallback={probe.FallbackPollerActive()}, "
+            + $"lastRefresh={probe.LastSuccessfulRefreshUtc()?.ToString("o") ?? "null"})");
 
         if (failures.Count > 0)
         {
             throw new Xunit.Sdk.XunitException(
-                $"scenario \"{run.Name}\" — {fail}/{states.Count} expectations failed:\n{string.Join("\n", failures)}");
+                $"scenario \"{run.Name}\" — {failures.Count} failure(s) ({fail}/{states.Count} expectations):\n{string.Join("\n", failures)}");
         }
     }
 
     // ---- chaos injection translation ----
 
-    private static async Task<InjectionState?> ApplyInjectAsync(ToxiproxyClient tp, ChaosScenario.Inject inj)
+    /// <summary>What an inject needs from the rig.</summary>
+    internal sealed class InjectContext
     {
+        public InjectContext(ToxiproxyClient tp, int ssePort, string sdkKey)
+        {
+            Tp = tp;
+            SsePort = ssePort;
+            SdkKey = sdkKey;
+        }
+
+        public ToxiproxyClient Tp { get; }
+        public int SsePort { get; }
+        public string SdkKey { get; }
+    }
+
+    private static async Task FireEventAsync(
+        InjectContext rig,
+        ChaosScenario.Event ev,
+        ConcurrentDictionary<string, InjectionState> injections,
+        CancellationToken ct)
+    {
+        if (ev.Inject is not null)
+        {
+            var st = await ApplyInjectAsync(rig, ev.Inject);
+            if (!string.IsNullOrEmpty(ev.Inject.Name))
+            {
+                injections[ev.Inject.Name!] = st;
+            }
+        }
+        else if (!string.IsNullOrEmpty(ev.Clear))
+        {
+            if (!injections.TryRemove(ev.Clear!, out var st))
+            {
+                throw new InvalidOperationException($"clear \"{ev.Clear}\" names no active injection");
+            }
+            await ClearInjectAsync(rig.Tp, st);
+        }
+        else if (ev.Process is not null)
+        {
+            await ApplyProcessAsync(rig.Tp, ev.Process, ct);
+        }
+        else
+        {
+            throw new NotSupportedException($"chaos step at_ms={ev.AtMs} has no inject, clear or process");
+        }
+    }
+
+    /// <summary>
+    /// Applies one inject through toxiproxy. An inject shape this rig does not implement throws
+    /// (and so fails the scenario) instead of running as a no-op (qfg-6vno.4).
+    /// </summary>
+    internal static async Task<InjectionState> ApplyInjectAsync(InjectContext rig, ChaosScenario.Inject inj)
+    {
+        var tp = rig.Tp;
         var name = string.IsNullOrEmpty(inj.Name) ? "anon" : inj.Name!;
         if (inj.SseSilentStallAfterMs is not null)
         {
@@ -388,43 +473,96 @@ public sealed class ChaosTests
             await tp.SetEnabledAsync("sse", false);
             return new InjectionState(null, null, new[] { "sse" });
         }
+        if (inj.HttpDownMs is not null)
+        {
+            await tp.SetEnabledAsync("http", false);
+            return new InjectionState(null, null, new[] { "http" });
+        }
         if (inj.BothDownMs is not null)
         {
             await tp.SetEnabledAsync("sse", false);
             await tp.SetEnabledAsync("http", false);
             return new InjectionState(null, null, new[] { "sse", "http" });
         }
-        if (inj.SseHalfOpenAfterBytes is not null)
+        if (inj.SseHalfOpenAfterBytes is { } afterBytes)
         {
-            // Toxiproxy is TCP-only; the closest analog is to disable the proxy so the SDK
-            // observes ECONNREFUSED on the next attempt. Mirrors sdk-java's qfg-47c2.29 fix.
-            await tp.SetEnabledAsync("sse", false);
-            return new InjectionState(null, null, new[] { "sse" });
+            // "SSE returns 200, writes N body bytes, closes." toxiproxy's limit_data closes a
+            // connection after a byte budget that counts the HTTP response head too, so the budget
+            // is the measured response-head length plus N: each new attempt gets the 200 headers
+            // and N body bytes, then EOF before its first frame — the path the first-frame rule
+            // (qfg-goi1.10.41) governs. The live stream is cut once the same budget is spent from
+            // the moment the toxic lands (a few 1s heartbeats). Replaces the old substitution of
+            // disabling the proxy (ECONNREFUSED), which never exercised "200 then close".
+            int head = await MeasureSseResponseHeadBytesAsync(rig);
+            var attrs = new Dictionary<string, object?> { ["bytes"] = head + afterBytes };
+            await tp.AddToxicAsync("sse", name, "limit_data", "downstream", attrs);
+            return new InjectionState("sse", name, Array.Empty<string>());
         }
-        if (inj.SseHttpStatus is not null)
+        if (inj.SseHttpStatus is not null || inj.HttpStatus is not null)
         {
-            // Toxiproxy can't rewrite HTTP responses — scenario 08 lives in scenarios-http-proxy
-            // and isn't picked up by the default suite. No-op for safety.
-            return new InjectionState(null, null, Array.Empty<string>());
+            // Toxiproxy is TCP-only and cannot rewrite an HTTP status; scenarios-http-proxy (08) is
+            // not wired for sdk-net. Fail rather than run the scenario as a no-op.
+            throw new NotSupportedException(
+                "inject " + DescribeInject(inj) + ": HTTP status injection needs an HTTP-aware proxy; toxiproxy is TCP-only");
         }
         if (!string.IsNullOrEmpty(inj.Proxy) && inj.Toxic is not null)
         {
-            var type = inj.Toxic["type"]?.ToString() ?? "noop";
+            var type = inj.Toxic.TryGetValue("type", out var t) ? t?.ToString() : null;
+            if (string.IsNullOrEmpty(type))
+            {
+                throw new NotSupportedException("raw toxic inject without a type");
+            }
             var attrs = new Dictionary<string, object?>(StringComparer.Ordinal);
             if (inj.Toxic.TryGetValue("attributes", out var raw)
                 && raw is Dictionary<string, object?> rawAttrs)
             {
                 foreach (var kv in rawAttrs) attrs[kv.Key] = kv.Value;
             }
-            await tp.AddToxicAsync(inj.Proxy!, name, type, "downstream", attrs);
+            await tp.AddToxicAsync(inj.Proxy!, name, type!, "downstream", attrs);
             return new InjectionState(inj.Proxy, name, Array.Empty<string>());
         }
-        return null;
+        throw new NotSupportedException("unsupported inject " + DescribeInject(inj));
+    }
+
+    /// <summary>
+    /// Length of the SSE response head (status line + headers + blank line) as the fixture
+    /// api-delivery sends it through the sse proxy, measured with one raw request.
+    /// </summary>
+    private static async Task<int> MeasureSseResponseHeadBytesAsync(InjectContext rig)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var tcp = new System.Net.Sockets.TcpClient();
+        await tcp.ConnectAsync("127.0.0.1", rig.SsePort, cts.Token);
+        using var stream = tcp.GetStream();
+        var auth = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("1:" + rig.SdkKey));
+        var req = "GET /api/v2/sse/config HTTP/1.1\r\nHost: 127.0.0.1:" + rig.SsePort
+            + "\r\nAuthorization: Basic " + auth
+            + "\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+        var bytes = System.Text.Encoding.ASCII.GetBytes(req);
+        await stream.WriteAsync(bytes, cts.Token);
+        var buf = new List<byte>();
+        var one = new byte[1];
+        while (true)
+        {
+            int n = await stream.ReadAsync(one, cts.Token);
+            if (n == 0) throw new IOException("SSE endpoint closed before the response head ended");
+            buf.Add(one[0]);
+            int c = buf.Count;
+            if (c >= 4 && buf[c - 4] == '\r' && buf[c - 3] == '\n' && buf[c - 2] == '\r' && buf[c - 1] == '\n')
+            {
+                var statusLine = System.Text.Encoding.ASCII.GetString(buf.ToArray(), 0, Math.Min(c, 15));
+                if (!statusLine.StartsWith("HTTP/1.1 200", StringComparison.Ordinal))
+                {
+                    throw new IOException("SSE endpoint did not answer 200: " + statusLine);
+                }
+                return c;
+            }
+            if (c > 16384) throw new IOException("SSE response head larger than 16KiB");
+        }
     }
 
     private static async Task ClearInjectAsync(ToxiproxyClient tp, InjectionState st)
     {
-        if (st is null) return;
         if (!string.IsNullOrEmpty(st.Toxic) && !string.IsNullOrEmpty(st.Proxy))
         {
             await tp.RemoveToxicAsync(st.Proxy!, st.Toxic!);
@@ -435,30 +573,41 @@ public sealed class ChaosTests
         }
     }
 
-    private static async Task ApplyProcessAsync(ToxiproxyClient tp, ChaosScenario.Process p, CancellationToken ct)
+    /// <summary>Out-of-band process events. An action this rig does not implement throws.</summary>
+    internal static async Task ApplyProcessAsync(ToxiproxyClient tp, ChaosScenario.Process p, CancellationToken ct)
     {
-        if ("kill_sse_proxy".Equals(p.Action, StringComparison.Ordinal))
+        if (!"kill_sse_proxy".Equals(p.Action, StringComparison.Ordinal))
         {
-            int count = Math.Max(1, p.Count);
-            int interval = p.IntervalMs > 0 ? p.IntervalMs : 1000;
-            for (int i = 0; i < count; i++)
+            throw new NotSupportedException($"unsupported process action \"{p.Action}\"");
+        }
+        int count = Math.Max(1, p.Count);
+        int interval = p.IntervalMs > 0 ? p.IntervalMs : 1000;
+        for (int i = 0; i < count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            await tp.SetEnabledAsync("sse", false);
+            try
             {
-                if (ct.IsCancellationRequested) return;
-                try
-                {
-                    await tp.SetEnabledAsync("sse", false);
-                    await Task.Delay(200, ct);
-                    await tp.SetEnabledAsync("sse", true);
-                }
-                catch (OperationCanceledException) { return; }
-                catch { /* best-effort */ }
-                if (i < count - 1)
-                {
-                    try { await Task.Delay(Math.Max(0, interval - 200), ct); }
-                    catch (OperationCanceledException) { return; }
-                }
+                await Task.Delay(200, ct);
+            }
+            finally
+            {
+                // Always re-enable, even when the scenario ends mid-kill.
+                await tp.SetEnabledAsync("sse", true);
+            }
+            if (i < count - 1)
+            {
+                await Task.Delay(Math.Max(0, interval - 200), ct);
             }
         }
+    }
+
+    private static string DescribeEvent(ChaosScenario.Event ev)
+    {
+        if (ev.Inject is not null) return "inject " + DescribeInject(ev.Inject);
+        if (!string.IsNullOrEmpty(ev.Clear)) return "clear " + ev.Clear;
+        if (ev.Process is not null) return $"process {ev.Process.Action}/{ev.Process.Count}";
+        return "(empty step)";
     }
 
     private static string DescribeInject(ChaosScenario.Inject inj)
@@ -468,9 +617,12 @@ public sealed class ChaosTests
         if (inj.SseBandwidthKbps is not null) return "sse_bandwidth_kbps=" + inj.SseBandwidthKbps;
         if (inj.SseDownMs is not null) return "sse_down_ms=" + inj.SseDownMs;
         if (inj.BothDownMs is not null) return "both_down_ms=" + inj.BothDownMs;
+        if (inj.HttpDownMs is not null) return "http_down_ms=" + inj.HttpDownMs;
+        if (inj.HttpStatus is not null) return "http_status=" + inj.HttpStatus;
         if (inj.SseHalfOpenAfterBytes is not null) return "sse_half_open_after_bytes=" + inj.SseHalfOpenAfterBytes;
         if (inj.SseHttpStatus is not null) return "sse_http_status=" + inj.SseHttpStatus;
-        return "?";
+        if (!string.IsNullOrEmpty(inj.Proxy)) return "proxy=" + inj.Proxy + " toxic";
+        return "(unrecognized inject" + (string.IsNullOrEmpty(inj.Name) ? "" : " name=" + inj.Name) + ")";
     }
 
     private static string EnvOr(string key, string def)
@@ -509,7 +661,7 @@ public sealed class ChaosTests
 
     // ---- internal state types ----
 
-    private sealed class InjectionState
+    internal sealed class InjectionState
     {
         public InjectionState(string? proxy, string? toxic, IReadOnlyList<string> enable)
         {

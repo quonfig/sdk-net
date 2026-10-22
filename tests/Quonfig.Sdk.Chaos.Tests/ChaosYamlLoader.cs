@@ -95,6 +95,9 @@ internal static class ChaosYamlLoader
         s.WallClockSeconds = AsInt(Lookup(m, "wall_clock_seconds"), 30);
         s.UserCallback = AsString(Lookup(m, "user_callback"));
         s.Topology = AsString(Lookup(m, "topology"));
+        s.OnInitFailure = AsString(Lookup(m, "on_init_failure"));
+        s.InitTimeoutMs = AsIntOrNull(Lookup(m, "init_timeout_ms"));
+        s.CatchInitFailure = string.Equals(AsString(Lookup(m, "catch_init_failure")), "true", StringComparison.OrdinalIgnoreCase);
         if (Lookup(m, "upstreams") is YamlSequenceNode ups)
         {
             foreach (var u in ups)
@@ -138,8 +141,26 @@ internal static class ChaosYamlLoader
         return list;
     }
 
+    // Inject keys this runner knows. An unknown key would otherwise parse to an inject with every
+    // field null, which the runner used to apply as a silent no-op (qfg-6vno.4).
+    private static readonly HashSet<string> AllowedInjectKeys = new(StringComparer.Ordinal)
+    {
+        "name", "sse_silent_stall_after_ms", "sse_latency_ms", "sse_bandwidth_kbps", "sse_down_ms",
+        "both_down_ms", "http_down_ms", "sse_half_open_after_bytes", "sse_http_status", "http_status",
+        "primary_refused_ms",
+        "primary_hang_ms", "primary_latency_ms", "proxy", "toxic",
+    };
+
     private static ChaosScenario.Inject ParseInject(YamlMappingNode m)
     {
+        foreach (var k in m.Children.Keys)
+        {
+            var key = (k as YamlScalarNode)?.Value ?? string.Empty;
+            if (!AllowedInjectKeys.Contains(key))
+            {
+                throw new InvalidDataException($"chaos YAML: unknown inject key \"{key}\"");
+            }
+        }
         var inj = new ChaosScenario.Inject
         {
             Name = AsString(Lookup(m, "name")),
@@ -148,6 +169,8 @@ internal static class ChaosYamlLoader
             SseBandwidthKbps = AsIntOrNull(Lookup(m, "sse_bandwidth_kbps")),
             SseDownMs = AsIntOrNull(Lookup(m, "sse_down_ms")),
             BothDownMs = AsIntOrNull(Lookup(m, "both_down_ms")),
+            HttpDownMs = AsIntOrNull(Lookup(m, "http_down_ms")),
+            HttpStatus = AsIntOrNull(Lookup(m, "http_status")),
             SseHalfOpenAfterBytes = AsIntOrNull(Lookup(m, "sse_half_open_after_bytes")),
             SseHttpStatus = AsIntOrNull(Lookup(m, "sse_http_status")),
             PrimaryRefusedMs = AsIntOrNull(Lookup(m, "primary_refused_ms")),
