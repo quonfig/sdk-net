@@ -852,7 +852,10 @@ public sealed class Quonfig : IQuonfig
             // forever (qfg-9p4i.17.5, D3).
             _httpTransport = new HttpTransport(
                 uris, _opts.SdkKey!, TransportCeiling(_opts), _opts.HttpMessageHandler,
-                _opts.ConfigFetchTimeout, _opts.ConfigFetchHedgeDelay, _opts.ConfigFetchHedgeAbort);
+                _opts.ConfigFetchTimeout, _opts.ConfigFetchHedgeDelay, _opts.ConfigFetchHedgeAbort)
+            {
+                Logger = _logger,
+            };
         }
         catch (Exception ex)
         {
