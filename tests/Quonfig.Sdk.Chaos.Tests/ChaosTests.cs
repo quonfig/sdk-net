@@ -490,12 +490,17 @@ public sealed class ChaosTests
             // connection after a byte budget that counts the HTTP response head too, so the budget
             // is the measured response-head length plus N: each new attempt gets the 200 headers
             // and N body bytes, then EOF before its first frame — the path the first-frame rule
-            // (qfg-goi1.10.41) governs. The live stream is cut once the same budget is spent from
-            // the moment the toxic lands (a few 1s heartbeats). Replaces the old substitution of
-            // disabling the proxy (ECONNREFUSED), which never exercised "200 then close".
+            // (qfg-goi1.10.41) governs. Replaces the old substitution of disabling the proxy for the
+            // whole window (ECONNREFUSED), which never exercised "200 then close".
             int head = await MeasureSseResponseHeadBytesAsync(rig);
             var attrs = new Dictionary<string, object?> { ["bytes"] = head + afterBytes };
             await tp.AddToxicAsync("sse", name, "limit_data", "downstream", attrs);
+            // The rug-pull also hits the stream that is already open: limit_data's budget on a
+            // live link starts when the toxic lands, and at a ~20-byte keepalive per second it
+            // would not run out inside the scenario window (observed: no restart in 25s). Toggling
+            // the proxy closes the live link; the toxic stays, so every reconnect meets it.
+            await tp.SetEnabledAsync("sse", false);
+            await tp.SetEnabledAsync("sse", true);
             return new InjectionState("sse", name, Array.Empty<string>());
         }
         if (inj.SseHttpStatus is not null || inj.HttpStatus is not null)
