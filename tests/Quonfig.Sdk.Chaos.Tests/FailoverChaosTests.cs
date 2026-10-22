@@ -621,9 +621,6 @@ public sealed class FailoverChaosTests
         private static readonly Regex ReInstalls = new(@"^client\.configInstallCount\(\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
         private static readonly Regex ReSseFailover = new(@"^client\.sseFailedOverToSecondary\(\)\s*==\s*(true|false)$", RegexOptions.Compiled);
 
-        private static readonly Regex ReSdkLog =
-            new(@"^client\.sdkLog\(\s*'([^']+)'\s*,\s*/(.+)/i\s*\)\s*(>=|<=|==|!=|<|>)\s*(\d+)$", RegexOptions.Compiled);
-
         private readonly FailoverProbe _probe;
         private readonly ChaosProbe _logs;
 
@@ -689,12 +686,10 @@ public sealed class FailoverChaosTests
                 bool got = _probe.SseFailedOverToSecondary();
                 return (got == want, $"sseFailedOverToSecondary={got} want {want}");
             }
-            if ((m = ReSdkLog.Match(expr)).Success)
+            // Exactly the requested level (chaos README); the SDK's own log lines.
+            if (ExpressionEvaluator.TryEvalSdkLog(_logs, expr, out var logOk, out var logReason))
             {
-                // Exactly the requested level (chaos README); the SDK's own log lines.
-                int got = _logs.SdkLogMatches(m.Groups[1].Value, new Regex(m.Groups[2].Value, RegexOptions.IgnoreCase));
-                int want = int.Parse(m.Groups[4].Value);
-                return (Compare(m.Groups[3].Value, got, want), $"sdkLog({m.Groups[1].Value},/{m.Groups[2].Value}/i)={got} {m.Groups[3].Value} {want}");
+                return (logOk, logReason);
             }
             return (false, "unrecognized expression: " + expr);
         }

@@ -41,6 +41,19 @@ public class ChaosProbeHonestyTests
     }
 
     [Fact]
+    public void SdkLog_WithoutIFlag_ParsesAndIsCaseSensitive()
+    {
+        // f01/f04 (ITD v2026.10.21.1) write /re/ with no i flag.
+        var probe = new ChaosProbe();
+        probe.Log("warning", "[quonfig] init: config not loaded yet, retrying");
+        var ev = new ExpressionEvaluator(probe);
+        var r = ev.Evaluate("client.sdkLog('warn', /\\[quonfig\\] init/) == 1 AND client.sdkLog('error', /\\[quonfig\\] init/) == 0");
+        Assert.True(r.Passed, r.Reason);
+        Assert.True(ev.Evaluate("client.sdkLog('warn', /\\[QUONFIG\\] init/) == 0").Passed);
+        Assert.True(ev.Evaluate("client.sdkLog('warn', /\\[QUONFIG\\] init/i) == 1").Passed);
+    }
+
+    [Fact]
     public void ProbeWithoutClient_FailsLoudly_InsteadOfReportingADefault()
     {
         var probe = new ChaosProbe();
