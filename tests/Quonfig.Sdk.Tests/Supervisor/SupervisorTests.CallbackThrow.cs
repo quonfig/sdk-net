@@ -114,6 +114,77 @@ public sealed partial class SupervisorTests
         errors[0].Exception!.StackTrace.Should().NotBeNullOrEmpty();
     }
 
+    // A user handler that throws OperationCanceledException or a subclass (an HttpClient timeout
+    // inside the handler throws TaskCanceledException) is still an ordinary user-callback throw:
+    // contract Test 5 names `Exception` for .NET, and OperationCanceledException derives from it.
+    // It must be counted and logged at Error like any other, not escape into the install path.
+    [Theory]
+    [InlineData(1)] // throws during the init install
+    [InlineData(2)] // throws during the first SSE install
+    public async Task Test5_OnConfigUpdateThrowsTaskCanceled_IsCountedAndLoggedAtError(int throwOnCall)
+    {
+        var log = new ExceptionCaptureLogger();
+        int calls = 0;
+        var thirdCall = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var client = new Quonfig(CallbackOptions(log, onConfigChange: () =>
+        {
+            int n = Interlocked.Increment(ref calls);
+            if (n == throwOnCall) throw new TaskCanceledException("user handler http timeout");
+            if (n >= 3) thirdCall.TrySetResult(true);
+        }));
+
+        await client.InitAsync();
+        (await Task.WhenAny(thirdCall.Task, Task.Delay(TimeSpan.FromSeconds(5)))).Should().BeSameAs(thirdCall.Task,
+            "after the throw the SDK still installs both SSE envelopes and runs the callback again (calls={0})", Volatile.Read(ref calls));
+        await WaitUntilAsync(() => client.ConnectionState == ConnectionState.Connected, TimeSpan.FromSeconds(2));
+
+        client.CallbackErrorsTotal("on_config_update").Should().Be(1);
+        client.WorkerRestartTotal("1").Should().Be(0, "a callback throw is not a worker restart");
+        client.WorkerRestartTotal("2").Should().Be(0, "a callback throw is not a worker restart");
+        client.GetString(CallbackKey, null, "default").Should().Be("v3");
+        client.ConnectionState.Should().Be(ConnectionState.Connected);
+
+        var errors = log.Lines.Where(l => l.Level == MelLogLevel.Error).ToList();
+        errors.Should().ContainSingle("one ERROR per caught throw");
+        errors[0].Message.Should().MatchRegex("(?i)callback|onConfigUpdate");
+        errors[0].Exception.Should().BeOfType<TaskCanceledException>();
+        log.Lines.Where(l => l.Level == MelLogLevel.Warning && System.Text.RegularExpressions.Regex.IsMatch(l.Message, "user handler http timeout"))
+            .Should().BeEmpty("the handler throw is not misattributed to the install");
+    }
+
+    [Fact]
+    public async Task Test5_OnConnectionStateChangeThrowsOperationCanceled_IsCountedAndLoggedAtError_RemainingListenersRun()
+    {
+        var log = new ExceptionCaptureLogger();
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var client = new Quonfig(CallbackOptions(log, onConfigChange: null, release.Task));
+        int throwingCalls = 0;
+        var seenByNext = new List<ConnectionState>();
+        client.OnConnectionStateChange += _ =>
+        {
+            if (Interlocked.Increment(ref throwingCalls) == 1) throw new OperationCanceledException("user state handler cancelled");
+        };
+        client.OnConnectionStateChange += st =>
+        {
+            lock (seenByNext) seenByNext.Add(st);
+        };
+        release.SetResult(true);
+
+        await client.InitAsync();
+        await WaitUntilAsync(
+            () => client.ConnectionState == ConnectionState.Connected && client.GetString(CallbackKey, null, "default") == "v3",
+            TimeSpan.FromSeconds(5));
+
+        client.CallbackErrorsTotal("on_connection_state_change").Should().Be(1);
+        client.ConnectionState.Should().Be(ConnectionState.Connected);
+        client.GetString(CallbackKey, null, "default").Should().Be("v3");
+        lock (seenByNext) seenByNext.Should().Contain(ConnectionState.Connected, "the listener after the throwing one still runs");
+
+        var errors = log.Lines.Where(l => l.Level == MelLogLevel.Error).ToList();
+        errors.Should().ContainSingle("one ERROR per caught throw");
+        errors[0].Exception.Should().BeOfType<OperationCanceledException>();
+    }
+
     private static QuonfigOptions CallbackOptions(ILogger log, Action? onConfigChange, Task? streamRelease = null) => new()
     {
         SdkKey = "test-sdk-key",
