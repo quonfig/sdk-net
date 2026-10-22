@@ -1992,6 +1992,9 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Test 5: any throw from a user callback, OperationCanceledException included, is caught, counted and logged at Error.")]
     private void FireConfigChange()
     {
         var handler = OnConfigChange;
@@ -2002,10 +2005,12 @@ public sealed class Quonfig : IQuonfig
             {
                 ((Action)del)();
             }
-            catch (Exception ex) when (!(ex is OperationCanceledException))
+            catch (Exception ex)
             {
                 // Test 5 (qfg-6vno.21): a user callback throw is caught here, counted, and logged
-                // at Error with the exception and stack. It is not a worker restart and changes no
+                // at Error with the exception and stack. Every exception counts, including
+                // OperationCanceledException / TaskCanceledException (e.g. an HttpClient timeout
+                // inside the handler): it comes from user code, not from SDK cancellation. It is not a worker restart and changes no
                 // connection state; the remaining listeners still run.
                 Interlocked.Increment(ref _callbackErrorsOnConfigUpdate);
                 _logger.LogError(ex, "quonfig: OnConfigChange callback (onConfigUpdate) threw: {Message}", ex.Message);
@@ -2013,6 +2018,9 @@ public sealed class Quonfig : IQuonfig
         }
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Design", "CA1031:Do not catch general exception types",
+        Justification = "Test 5: any throw from a user callback, OperationCanceledException included, is caught, counted and logged at Error.")]
     private void UpdateConnectionState(ConnectionState next)
     {
         var sup = _supervisor;
@@ -2035,9 +2043,10 @@ public sealed class Quonfig : IQuonfig
             {
                 ((Action<ConnectionState>)del)(next);
             }
-            catch (Exception ex) when (!(ex is OperationCanceledException))
+            catch (Exception ex)
             {
                 // Test 5 (qfg-6vno.21): counted and logged at Error; state is already updated.
+                // Includes OperationCanceledException thrown by the user handler.
                 Interlocked.Increment(ref _callbackErrorsOnConnectionStateChange);
                 _logger.LogError(ex, "quonfig: OnConnectionStateChange callback threw: {Message}", ex.Message);
             }
