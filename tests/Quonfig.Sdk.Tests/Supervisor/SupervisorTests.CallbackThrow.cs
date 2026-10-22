@@ -78,7 +78,10 @@ public sealed partial class SupervisorTests
     public async Task Test5_OnConnectionStateChangeThrow_IsCountedAndLoggedAtError_RemainingListenersRun()
     {
         var log = new ExceptionCaptureLogger();
-        await using var client = new Quonfig(CallbackOptions(log, onConfigChange: null));
+        // Hold the stream until both listeners are subscribed: the client starts init (and then
+        // the stream) from its constructor, so the Connected edge could otherwise fire first.
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var client = new Quonfig(CallbackOptions(log, onConfigChange: null, release.Task));
         int throwingCalls = 0;
         var seenByNext = new List<ConnectionState>();
         client.OnConnectionStateChange += _ =>
@@ -89,6 +92,7 @@ public sealed partial class SupervisorTests
         {
             lock (seenByNext) seenByNext.Add(st);
         };
+        release.SetResult(true);
 
         await client.InitAsync();
         await WaitUntilAsync(
@@ -110,7 +114,7 @@ public sealed partial class SupervisorTests
         errors[0].Exception!.StackTrace.Should().NotBeNullOrEmpty();
     }
 
-    private static QuonfigOptions CallbackOptions(ILogger log, Action? onConfigChange) => new()
+    private static QuonfigOptions CallbackOptions(ILogger log, Action? onConfigChange, Task? streamRelease = null) => new()
     {
         SdkKey = "test-sdk-key",
         ApiUrls = new[] { "http://callback-throw.test" },
@@ -118,7 +122,7 @@ public sealed partial class SupervisorTests
         InitTimeout = TimeSpan.FromSeconds(5),
         CollectEvaluationSummaries = false,
         ContextUploadMode = ContextUploadMode.None,
-        HttpMessageHandler = new CallbackRigHandler(),
+        HttpMessageHandler = new CallbackRigHandler(streamRelease ?? Task.CompletedTask),
         Logger = log,
         OnConfigChange = onConfigChange,
     };
@@ -134,16 +138,22 @@ public sealed partial class SupervisorTests
 
     /// <summary>
     /// <c>/api/v2/configs</c> serves gen 1 ("v1"); the SSE stream delivers gen 2 and gen 3
-    /// back-to-back and then stays open, so no worker run ends during the test.
+    /// back-to-back (once <c>release</c> completes) and then stays open, so no worker run ends
+    /// during the test.
     /// </summary>
     private sealed class CallbackRigHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        private readonly Task _release;
+
+        public CallbackRigHandler(Task release) { _release = release; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
             HttpResponseMessage resp;
             if (path.EndsWith("/api/v2/sse/config", StringComparison.Ordinal))
             {
+                await _release;
                 var events = "data: " + CallbackEnvelope(2, "v2") + "\n\n" + "data: " + CallbackEnvelope(3, "v3") + "\n\n";
                 resp = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new HoldOpenStream(Encoding.UTF8.GetBytes(events))) };
                 resp.Content.Headers.TryAddWithoutValidation("Content-Type", "text/event-stream");
@@ -152,7 +162,7 @@ public sealed partial class SupervisorTests
             {
                 resp = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(CallbackEnvelope(1, "v1"), Encoding.UTF8, "application/json") };
             }
-            return Task.FromResult(resp);
+            return resp;
         }
     }
 
