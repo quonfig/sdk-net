@@ -1858,6 +1858,12 @@ public sealed class Quonfig : IQuonfig
     internal long SseConnectAttemptsTotal => _sseCounters.ConnectAttempts;
 
     /// <summary>
+    /// Test-only: SSE attempts that got a 200 and ended before their first valid frame. The chaos
+    /// harness reads it to prove a half-open inject really produced "200 then close".
+    /// </summary>
+    internal long SseOkWithoutFrameTotal => _sseCounters.OkWithoutFrame;
+
+    /// <summary>
     /// Internal, test-only: <c>quonfig_sdk_worker_restart_total</c> for <paramref name="layer"/>.
     /// Layer "1" is the SSE worker (each run that ended and was restarted); layer "2" is the
     /// supervised fallback poller. Any other layer reads 0.
