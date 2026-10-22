@@ -159,6 +159,16 @@ public sealed class Quonfig : IQuonfig
     /// </summary>
     private int _heldGeneration = -1;
 
+    /// <summary>
+    /// <c>OnConfigChange</c> deliveries queued by <see cref="InstallEnvelope"/> and not yet fired.
+    /// Installs only count here; the handlers run from <see cref="DeliverConfigChanges"/>, which every
+    /// install path calls AFTER releasing <see cref="_installLock"/> (qfg-6vno.12, sdk-go qfg-eefx).
+    /// </summary>
+    private int _pendingConfigChanges;
+
+    /// <summary>1 while one thread is draining <see cref="_pendingConfigChanges"/>; keeps handlers serial.</summary>
+    private int _configChangeDraining;
+
     /// <summary>Count of envelopes actually installed from the network (rejected-older installs don't count).</summary>
     private int _networkInstallCount;
 
@@ -696,6 +706,7 @@ public sealed class Quonfig : IQuonfig
         }
         var envelope = DatadirLoader.Load(datadir, _opts.Environment!, _logger);
         InstallEnvelope(envelope);
+        DeliverConfigChanges();
         _initTcs.TrySetResult(true);
 
         if (_opts.DatadirAutoReload)
@@ -727,6 +738,7 @@ public sealed class Quonfig : IQuonfig
         // The meta.environment fallback now lives in InstallEnvelope so every install path
         // (datafile, datadir, HTTP init, HTTP refresh, SSE) shares it. (qfg-64m9)
         InstallEnvelope(envelope);
+        DeliverConfigChanges();
         _initTcs.TrySetResult(true);
     }
 
@@ -775,6 +787,7 @@ public sealed class Quonfig : IQuonfig
         {
             var envelope = DatadirLoader.Load(datadir, _effectiveEnvironment!, _logger);
             InstallEnvelope(envelope);
+            DeliverConfigChanges();
         }
         catch (Exception ex)
         {
@@ -1701,8 +1714,18 @@ public sealed class Quonfig : IQuonfig
     /// re-delivery is ordinary steady-state traffic (qfg-rr5b). A rejected unversioned payload is
     /// likewise not provably older (it carries no ordering info), so it is a silent no-op too
     /// (qfg-9dxb.9). The INSTALL decision is identical for all three — none is installed.</para>
+    ///
+    /// <para><c>OnConfigChange</c> fires after <see cref="_installLock"/> is released, so a slow or
+    /// re-entrant handler never stalls or deadlocks the other install paths (qfg-6vno.12).</para>
     /// </summary>
     private NetworkInstallOutcome InstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
+    {
+        var outcome = InstallFromNetworkLocked(envelope, sourceIndex);
+        DeliverConfigChanges();
+        return outcome;
+    }
+
+    private NetworkInstallOutcome InstallFromNetworkLocked(ConfigEnvelope envelope, int sourceIndex)
     {
         lock (_installLock)
         {
@@ -1909,7 +1932,41 @@ public sealed class Quonfig : IQuonfig
             _localLastRefresh = DateTimeOffset.UtcNow;
         }
         _readyTcs.TrySetResult(true);
-        FireConfigChange();
+        // Queue the OnConfigChange delivery; the caller fires it via DeliverConfigChanges once it
+        // has released _installLock. Never run user code here (qfg-6vno.12).
+        Interlocked.Increment(ref _pendingConfigChanges);
+    }
+
+    /// <summary>
+    /// Fires every queued <c>OnConfigChange</c> delivery, one at a time, in install order. Called by
+    /// each install path after it releases <see cref="_installLock"/>. A single drainer keeps the
+    /// handlers serial: a thread that finds another one draining leaves its queued delivery to that
+    /// drainer, so an install made from inside a handler (or concurrently on another thread) is
+    /// delivered after the running handler returns, and never blocks on it. Mirrors sdk-go qfg-eefx.
+    /// </summary>
+    private void DeliverConfigChanges()
+    {
+        while (Volatile.Read(ref _pendingConfigChanges) > 0)
+        {
+            if (Interlocked.CompareExchange(ref _configChangeDraining, 1, 0) != 0)
+            {
+                return; // the active drainer will pick our delivery up
+            }
+            try
+            {
+                while (Volatile.Read(ref _pendingConfigChanges) > 0)
+                {
+                    Interlocked.Decrement(ref _pendingConfigChanges);
+                    FireConfigChange();
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref _configChangeDraining, 0);
+            }
+            // Re-check: a delivery queued between our last read and releasing the drain flag would
+            // otherwise be stranded (its thread saw us draining and returned).
+        }
     }
 
     private void FireConfigChange()
