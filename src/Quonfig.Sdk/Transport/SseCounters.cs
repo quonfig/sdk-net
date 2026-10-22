@@ -16,6 +16,7 @@ internal sealed class SseCounters
 {
     private long _connectAttempts;
     private long _workerRestarts;
+    private long _okWithoutFrame;
 
     /// <summary>Every SSE connect attempt, whatever its outcome (refused, non-200, headers only, or a live stream).</summary>
     public long ConnectAttempts => Interlocked.Read(ref _connectAttempts);
@@ -26,7 +27,16 @@ internal sealed class SseCounters
     /// </summary>
     public long WorkerRestarts => Interlocked.Read(ref _workerRestarts);
 
+    /// <summary>
+    /// Attempts that got a 200 and then ended before their first valid frame (the half-open
+    /// shape the first-frame rule, qfg-goi1.10.41, governs). Transport errors and non-200s are not
+    /// counted; nor is a clean shutdown.
+    /// </summary>
+    public long OkWithoutFrame => Interlocked.Read(ref _okWithoutFrame);
+
     internal void RecordConnectAttempt() => Interlocked.Increment(ref _connectAttempts);
 
     internal void RecordWorkerRestart() => Interlocked.Increment(ref _workerRestarts);
+
+    internal void RecordOkWithoutFrame() => Interlocked.Increment(ref _okWithoutFrame);
 }

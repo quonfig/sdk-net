@@ -360,7 +360,7 @@ public sealed class SseClient : IDisposable
             bool firedConnect = false;
             try
             {
-                return await ParseStreamAsync(
+                bool consumed = await ParseStreamAsync(
                         body,
                         _onEnvelope,
                         _readTimeout,
@@ -372,6 +372,11 @@ public sealed class SseClient : IDisposable
                         },
                         cancellationToken)
                     .ConfigureAwait(false);
+                if (!consumed && !cancellationToken.IsCancellationRequested)
+                {
+                    Counters?.RecordOkWithoutFrame();
+                }
+                return consumed;
             }
             finally
             {

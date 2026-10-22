@@ -227,6 +227,7 @@ public sealed class ChaosTests
         // A client that cannot be constructed fails the scenario: there is nothing to observe.
         var client = new Sdk.Quonfig(opts);
         probe.SetClient(client);
+        rig.OkWithoutFrame = () => client.SseOkWithoutFrameTotal;
         Task? initTask = null;
         if (initMode)
         {
@@ -272,8 +273,8 @@ public sealed class ChaosTests
                 }
                 try
                 {
-                    await FireEventAsync(rig, captured, injections, chaosCts.Token);
-                    _out.WriteLine($"[{captured.AtMs,6}ms] {DescribeEvent(captured)}");
+                    var note = await FireEventAsync(rig, captured, injections, chaosCts.Token);
+                    _out.WriteLine($"[{captured.AtMs,6}ms] {DescribeEvent(captured)}{(note is null ? string.Empty : " — " + note)}");
                 }
                 catch (OperationCanceledException) when (chaosCts.IsCancellationRequested)
                 {
@@ -408,9 +409,16 @@ public sealed class ChaosTests
         public ToxiproxyClient Tp { get; }
         public int SsePort { get; }
         public string SdkKey { get; }
+
+        /// <summary>
+        /// The client's count of SSE attempts that got a 200 and ended before their first frame
+        /// (<c>Quonfig.SseOkWithoutFrameTotal</c>); set once the client exists.
+        /// </summary>
+        public Func<long>? OkWithoutFrame { get; set; }
     }
 
-    private static async Task FireEventAsync(
+    /// <summary>Fires one chaos step; returns a note for the timeline log (or null).</summary>
+    private static async Task<string?> FireEventAsync(
         InjectContext rig,
         ChaosScenario.Event ev,
         ConcurrentDictionary<string, InjectionState> injections,
@@ -431,6 +439,7 @@ public sealed class ChaosTests
                 throw new InvalidOperationException($"clear \"{ev.Clear}\" names no active injection");
             }
             await ClearInjectAsync(rig.Tp, st);
+            return st.Verify?.Invoke();
         }
         else if (ev.Process is not null)
         {
@@ -440,6 +449,7 @@ public sealed class ChaosTests
         {
             throw new NotSupportedException($"chaos step at_ms={ev.AtMs} has no inject, clear or process");
         }
+        return null;
     }
 
     /// <summary>
@@ -492,6 +502,8 @@ public sealed class ChaosTests
             // and N body bytes, then EOF before its first frame — the path the first-frame rule
             // (qfg-goi1.10.41) governs. Replaces the old substitution of disabling the proxy for the
             // whole window (ECONNREFUSED), which never exercised "200 then close".
+            var okWithoutFrame = rig.OkWithoutFrame
+                ?? throw new NotSupportedException("sse_half_open_after_bytes before the client exists");
             int head = await MeasureSseResponseHeadBytesAsync(rig);
             var attrs = new Dictionary<string, object?> { ["bytes"] = head + afterBytes };
             await tp.AddToxicAsync("sse", name, "limit_data", "downstream", attrs);
@@ -499,9 +511,24 @@ public sealed class ChaosTests
             // live link starts when the toxic lands, and at a ~20-byte keepalive per second it
             // would not run out inside the scenario window (observed: no restart in 25s). Toggling
             // the proxy closes the live link; the toxic stays, so every reconnect meets it.
+            long before = okWithoutFrame();
             await tp.SetEnabledAsync("sse", false);
             await tp.SetEnabledAsync("sse", true);
-            return new InjectionState("sse", name, Array.Empty<string>());
+            // Prove the inject did what it says: at least one attempt in the window got the 200
+            // and then EOF before its first frame. A budget that cuts inside the response head
+            // fails every attempt in SendAsync instead (a transport error, not this path) and
+            // 07's restart floor would still pass on those, silently (qfg-6vno.4 follow-up).
+            return new InjectionState("sse", name, Array.Empty<string>(), () =>
+            {
+                long got = okWithoutFrame() - before;
+                if (got < 1)
+                {
+                    throw new InvalidOperationException(
+                        $"inject {name}: no SSE attempt got a 200 and then EOF before its first frame "
+                        + $"(limit_data bytes={head + afterBytes}, head={head}); the half-open path was not exercised");
+                }
+                return $"{got} attempt(s) got 200 then EOF before the first frame (limit_data bytes={head + afterBytes}, head={head})";
+            });
         }
         if (inj.SseHttpStatus is not null || inj.HttpStatus is not null)
         {
@@ -531,7 +558,12 @@ public sealed class ChaosTests
 
     /// <summary>
     /// Length of the SSE response head (status line + headers + blank line) as the fixture
-    /// api-delivery sends it through the sse proxy, measured with one raw request.
+    /// api-delivery sends it through the sse proxy, measured with one raw request that carries
+    /// the SDK's own request headers (SseClient.ConnectOnceAsync). No <c>Connection: close</c>:
+    /// api-delivery answers that with a shorter head (<c>Connection: close</c>, 433 bytes) than
+    /// the SDK's keep-alive request gets (<c>Connection: keep-alive</c>, 438), and a budget built
+    /// on the short head cuts every SDK attempt inside its headers (a transport error) instead of
+    /// after the 200.
     /// </summary>
     private static async Task<int> MeasureSseResponseHeadBytesAsync(InjectContext rig)
     {
@@ -542,7 +574,8 @@ public sealed class ChaosTests
         var auth = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("1:" + rig.SdkKey));
         var req = "GET /api/v2/sse/config HTTP/1.1\r\nHost: 127.0.0.1:" + rig.SsePort
             + "\r\nAuthorization: Basic " + auth
-            + "\r\nAccept: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n";
+            + "\r\nX-Quonfig-SDK-Version: dotnet/" + Sdk.SdkInfo.Version
+            + "\r\nCache-Control: no-cache\r\nAccept: text/event-stream\r\n\r\n";
         var bytes = System.Text.Encoding.ASCII.GetBytes(req);
         await stream.WriteAsync(bytes, cts.Token);
         var buf = new List<byte>();
@@ -668,12 +701,19 @@ public sealed class ChaosTests
 
     internal sealed class InjectionState
     {
-        public InjectionState(string? proxy, string? toxic, IReadOnlyList<string> enable)
+        public InjectionState(string? proxy, string? toxic, IReadOnlyList<string> enable, Func<string>? verify = null)
         {
             Proxy = proxy;
             Toxic = toxic;
             Enable = enable;
+            Verify = verify;
         }
+
+        /// <summary>
+        /// Run when the inject is cleared; throws if the inject did not take effect, else returns a
+        /// note for the timeline log.
+        /// </summary>
+        public Func<string>? Verify { get; }
         public string? Proxy { get; }
         public string? Toxic { get; }
         public IReadOnlyList<string> Enable { get; }

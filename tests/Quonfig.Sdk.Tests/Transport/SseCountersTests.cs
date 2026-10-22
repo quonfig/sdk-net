@@ -38,6 +38,20 @@ public class SseCountersTests
         }
     }
 
+    /// <summary>200 headers + a partial byte, then EOF before any frame: the half-open shape.</summary>
+    private sealed class OkThenEofHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var ok = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(Encoding.UTF8.GetBytes(":")),
+            };
+            ok.Content.Headers.TryAddWithoutValidation("Content-Type", "text/event-stream");
+            return Task.FromResult(ok);
+        }
+    }
+
     private static async Task<SseCounters> RunUntilAsync(HttpMessageHandler handler, int sleeps)
     {
         var counters = new SseCounters();
@@ -77,6 +91,25 @@ public class SseCountersTests
         var c = await RunUntilAsync(handler, 3);
         c.ConnectAttempts.Should().Be(3);
         c.WorkerRestarts.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task OkThenEofBeforeFirstFrame_CountsAsOkWithoutFrame()
+    {
+        using var handler = new OkThenEofHandler();
+        var c = await RunUntilAsync(handler, 4);
+        c.ConnectAttempts.Should().Be(4);
+        c.WorkerRestarts.Should().Be(4);
+        c.OkWithoutFrame.Should().Be(4, "every attempt got a 200 and ended before its first frame");
+    }
+
+    [Fact]
+    public async Task RefusedAttemptsAndLiveStreams_AreNotOkWithoutFrame()
+    {
+        using var refused = new AlwaysFailHandler();
+        (await RunUntilAsync(refused, 3)).OkWithoutFrame.Should().Be(0, "a transport error never got a 200");
+        using var live = new KeepaliveThenCloseHandler();
+        (await RunUntilAsync(live, 3)).OkWithoutFrame.Should().Be(0, "these streams delivered a frame");
     }
 
     [Fact]
