@@ -98,6 +98,16 @@ public sealed class OnConfigChangeReentrancyTests
         }
     }
 
+    // net48-compatible stand-in for Task.WaitAsync(timeout).
+    private static async Task Within(Task task, TimeSpan timeout)
+    {
+        if (await Task.WhenAny(task, Task.Delay(timeout)) != task)
+        {
+            throw new TimeoutException("task did not complete in time");
+        }
+        await task;
+    }
+
     private static async Task WaitUntil(Func<bool> condition, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -124,7 +134,7 @@ public sealed class OnConfigChangeReentrancyTests
 
         server.Reset();
         ServeConfigs(server, 43);
-        await client.RefreshAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await Within(client.RefreshAsync(), TimeSpan.FromSeconds(5));
 
         client.HeldGeneration.Should().Be(43, "later installs still go through after the handler returned");
         await WaitUntil(() => handler.Calls >= 2, TimeSpan.FromSeconds(5));
@@ -137,7 +147,7 @@ public sealed class OnConfigChangeReentrancyTests
     {
         using var server = WireMockServer.Start();
         ServeConfigs(server, 42);
-        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new RefreshingHandler(call => call == 2, gate.Task);
 
         await using var client = new Quonfig(Options(server, sse: false, handler.Handle));
@@ -152,8 +162,8 @@ public sealed class OnConfigChangeReentrancyTests
         await WaitUntil(() => handler.Calls >= 2, TimeSpan.FromSeconds(5));
         server.Reset();
         ServeConfigs(server, 44);
-        gate.SetResult();
-        await refresh.WaitAsync(TimeSpan.FromSeconds(10));
+        gate.SetResult(true);
+        await Within(refresh, TimeSpan.FromSeconds(10));
         await WaitUntil(() => handler.Calls >= 3, TimeSpan.FromSeconds(10));
 
         handler.RefreshCompleted.Should().ContainSingle()
