@@ -179,7 +179,7 @@ jobs:
         # packages owned by `quonfig`; the policy was created by
         # `jeff-quonfig`.
         # See https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: nuget-login
         with:
           user: jeff-quonfig
