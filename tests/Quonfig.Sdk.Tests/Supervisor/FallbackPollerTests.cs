@@ -70,6 +70,16 @@ public sealed class FallbackPollerTests
     /// vacuous), tiny next to <see cref="CancelThreshold"/>.</summary>
     private static readonly TimeSpan ReconnectBefore = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>
+    /// Threshold for <see cref="ConnectThenDisconnectBackToBackRestartsTheThreshold"/>, paired
+    /// with <see cref="FlapDwell"/> (qfg-1j2c). The dwell must end inside this threshold.
+    /// </summary>
+    private static readonly TimeSpan FlapThreshold = TimeSpan.FromSeconds(3);
+
+    /// <summary>Disconnected dwell before the connect/disconnect flap. Large enough that a
+    /// regression (deadline anchored at the first disconnect) engages measurably early.</summary>
+    private static readonly TimeSpan FlapDwell = TimeSpan.FromMilliseconds(300);
+
     private static async Task WaitForAsync(TimeSpan timeout, Func<bool> predicate, string msg)
     {
         var start = DateTime.UtcNow;
@@ -182,10 +192,17 @@ public sealed class FallbackPollerTests
     // though the worker wakes after both edges and sees the same "disconnected" state it
     // decided against. Before, the worker kept waiting on the original deadline and engaged
     // at the first disconnect's threshold.
+    //
+    // qfg-1j2c: the dwell before the flap is a wall-clock sleep that has to finish INSIDE the
+    // first disconnect's threshold, or the poller legitimately engages off that first edge and
+    // the assertion reads like a poller bug. With a 1s threshold vs a 500ms dwell, a starved
+    // windows/net48 runner overshot the dwell to 1174ms (run 39817111621) and failed. The
+    // threshold is now FlapThreshold (3s) against FlapDwell (300ms): ~2.7s of slack, 4x the
+    // overshoot seen, while a regression still engages ~FlapDwell early and fails the bound.
     [Fact]
     public async Task ConnectThenDisconnectBackToBackRestartsTheThreshold()
     {
-        var threshold = TimeSpan.FromSeconds(1);
+        var threshold = FlapThreshold;
         var clock = System.Diagnostics.Stopwatch.StartNew();
         long engagedAtMs = -1;
         var p = new FallbackPoller(
@@ -197,10 +214,15 @@ public sealed class FallbackPollerTests
         try
         {
             p.SetSseConnected(false);
-            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(FlapDwell);
             long flapAtMs = clock.ElapsedMilliseconds;
             p.SetSseConnected(true);
             p.SetSseConnected(false);
+            // Precondition, not the contract: if the dwell overran the first threshold the
+            // poller engaged legitimately and the assertion below would blame the poller.
+            Interlocked.Read(ref engagedAtMs).Should().Be(-1,
+                "the {0}ms dwell overran the {1}ms threshold (flap at {2}ms), so the runner was starved, not the poller wrong",
+                (long)FlapDwell.TotalMilliseconds, (long)threshold.TotalMilliseconds, flapAtMs);
 
             await WaitForAsync(WaitBudget, () => Interlocked.Read(ref engagedAtMs) >= 0, "poller never engaged");
             long engaged = Interlocked.Read(ref engagedAtMs);
