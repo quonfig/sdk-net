@@ -1,17 +1,17 @@
 # Changelog
 
-## 1.11.0 - 2026-10-26
+## 2.0.0 - 2026-10-26
 
 The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by the
 integration-test-data matrix (`getter.contract.*`, tag `v2026.10.23`). In .NET this release widens
 what the typed getters accept (items 1 and 5). It also changes existing behavior in four places:
 a duration read as a string (item 2), a malformed stored int or double (item 3), a wrong-type read
 with no default under `OnNoDefault.Throw` (item 4), and the `Get*Details` error code for a
-malformed ENV_VAR value (item 7). These match the other SDKs' majors; .NET ships them in a minor
-because, apart from items 2 and 3, a call that passes a `defaultValue` gets the same result as in
-1.10.
+malformed ENV_VAR value (item 7). Because those change existing behavior, this is a major
+release, matching the other SDKs' majors. Apart from items 2 and 3, a call that passes a
+`defaultValue` gets the same result as in 1.10.
 
-### UPGRADE to 1.11
+### UPGRADE to 2.0
 
 1. **Int and double read each other safely.** `GetDouble` on an int config now returns it
    (`30` -> `30.0`); it returned your default before. `GetLong` / `GetInt` on a double config now
