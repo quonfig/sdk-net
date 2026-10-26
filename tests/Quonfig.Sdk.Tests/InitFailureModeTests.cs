@@ -1,5 +1,7 @@
 using System;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -79,13 +81,38 @@ public sealed class InitFailureModeTests
         ex.Reason.Should().Be(QuonfigInitFailureReason.Timeout);
     }
 
+    /// <summary>
+    /// Answers every request with an immediate 503, in memory. Decision 7 (init-failure design,
+    /// item 10) makes an attempt the deadline cuts while it is still in flight count as hung, so the
+    /// reason is <c>timeout</c>. Over a real socket a slow runner (windows / net48) could leave the
+    /// third 503 in flight at the 2s deadline and the test flaked to <see cref="QuonfigInitTimeoutException"/>
+    /// (qfg-m94a). With no I/O latency every attempt has settled before the deadline lands in a backoff sleep.
+    /// </summary>
+    private sealed class Instant503Handler : HttpMessageHandler
+    {
+        private int _configRequests;
+
+        public int ConfigRequests => Volatile.Read(ref _configRequests);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath == "/api/v2/configs")
+            {
+                Interlocked.Increment(ref _configRequests);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { RequestMessage = request });
+        }
+    }
+
     [Fact]
     public async Task Fail_RetriesThroughErrorsUntilTheTimeout_ThenRaisesUnavailable()
     {
-        using var server = WireMockServer.Start();
-        ServeStatus(server, 503);
+        const string apiUrl = "http://primary.quonfig.test:6550";
+        using var handler = new Instant503Handler();
         var logger = new CaptureLogger();
-        await using var client = new Quonfig(Options(new[] { server.Urls[0] }, OnInitFailure.Fail, TimeSpan.FromSeconds(2), logger));
+        var options = Options(new[] { apiUrl }, OnInitFailure.Fail, TimeSpan.FromSeconds(2), logger);
+        options.HttpMessageHandler = handler;
+        await using var client = new Quonfig(options);
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
@@ -94,10 +121,10 @@ public sealed class InitFailureModeTests
         raised.Should().NotBeOfType<QuonfigInitTimeoutException>();
         raised.Reason.Should().Be(QuonfigInitFailureReason.Unavailable);
         sw.Elapsed.Should().BeGreaterThan(TimeSpan.FromMilliseconds(1500), "fail retries until initTimeout");
-        server.LogEntries.Count(e => e.RequestMessage.Path == "/api/v2/configs").Should().BeGreaterThan(1, "the client retries through blips");
+        handler.ConfigRequests.Should().BeGreaterThan(1, "the client retries through blips");
         client.IsReady.Should().BeFalse();
 
-        var host = new Uri(server.Urls[0]).Authority;
+        var host = new Uri(apiUrl).Authority;
         logger.LogCount(MelLogLevel.Warning, @"^\[quonfig\] init: config not loaded yet, retrying until initTimeout \(2s\)\. primary=" + System.Text.RegularExpressions.Regex.Escape(host) + ": HTTP 503").Should().Be(1);
         logger.LogCount(MelLogLevel.Error, @"^\[quonfig\] init FAILED: no config after 2\.\ds\. primary=.*onInitFailure=fail: raising QuonfigInitException\. Options: onInitFailure=wait to keep waiting, onInitFailure=continue to start on code defaults, or raise initTimeout\.").Should().Be(1);
         logger.Lines.Should().NotContain(l => l.Message.Contains(SdkKey), "the SDK key is never logged");
