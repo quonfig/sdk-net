@@ -535,8 +535,27 @@ public sealed class Quonfig : IQuonfig
     /// <inheritdoc/>
     public bool IsFeatureEnabled(string key, ContextSet? contexts = null)
     {
-        // IsFeatureEnabled bypasses OnNoDefault entirely — always returns a bool.
-        var details = TypedDetailsRaw<bool>(key, contexts, false, EvalValueType.Bool, CoerceBool);
+        // Typed-getter contract (qfg-zvyy): IsFeatureEnabled never throws and bypasses OnNoDefault.
+        // It is true only for a resolved bool true. A missing key, a flag with no matching rule, a
+        // non-bool value or any resolution error returns false and logs a warning once per key.
+        var details = TypedDetailsRaw<bool>(key, contexts, false, EvalValueType.Bool, CoerceBool, out var resolveError);
+        if (resolveError is not null)
+        {
+            WarnReadFailureOnce(key, resolveError);
+        }
+        else if (details.Reason == Reason.Default || (details.Reason == Reason.Error && details.ErrorCode != ErrorCode.General))
+        {
+            // Default: the flag exists but no rule matched. Error: not found or type mismatch
+            // without a QuonfigException (none today). ErrorCode.General without a resolveError is
+            // "not yet initialized" or a contained evaluator crash; neither names a broken key.
+            if (_resolveErrorWarned.TryAdd(key, 0))
+            {
+                _logger.LogWarning(
+                    "quonfig: IsFeatureEnabled(\"{Key}\") returns false: {Reason}",
+                    key,
+                    details.Reason == Reason.Default ? "no rule matched" : (details.ErrorMessage ?? details.ErrorCode?.ToString()));
+            }
+        }
         return details.Value;
     }
 
@@ -2155,11 +2174,15 @@ public sealed class Quonfig : IQuonfig
                 MetadataFor(match, Reason.Default));
         }
 
-        if (!IsCompatible(match.Value.Type, expected))
+        if (!IsCompatible(match.Value, expected))
         {
-            return RowErrorDetails(
-                cfg, fallback, ErrorCode.TypeMismatch,
-                FormattableString.Invariant($"config \"{key}\" is {match.Value.Type}, caller expected {expected}"));
+            // Typed-getter contract (qfg-zvyy): a value of another type is never coerced. The
+            // public getters return the default (or null) and log once per key; with no default
+            // under OnNoDefault.Throw a plain typed getter raises QuonfigTypeMismatchException.
+            // The message names the types only, never the value.
+            var message = FormattableString.Invariant($"config \"{key}\" is {match.Value.Type}, caller expected {expected}");
+            resolveError = new QuonfigTypeMismatchException(message);
+            return RowErrorDetails(cfg, fallback, ErrorCode.TypeMismatch, message);
         }
 
         T typed;
@@ -2252,21 +2275,27 @@ public sealed class Quonfig : IQuonfig
     {
         if (resolveError is not null)
         {
-            if (_resolveErrorWarned.TryAdd(key, 0))
-            {
-                // A coercion message can carry a parser message that quotes the value (a stored value
-                // can be sensitive too), so log a fixed reason instead.
-                var why = resolveError is QuonfigCoercionException
-                    ? "value cannot be converted to the config's declared type"
-                    : resolveError.Message;
-                _logger.LogWarning(
-                    "quonfig: config \"{Key}\" could not be resolved ({ErrorType}): {Reason}; returning default",
-                    key, resolveError.GetType().Name, why);
-            }
+            WarnReadFailureOnce(key, resolveError);
             if (raise && defaultValue is null && _opts.OnNoDefault == OnNoDefault.Throw) throw resolveError;
             return details;
         }
         return ApplyOnNoDefault(key, defaultValue, details, raise);
+    }
+
+    // One warning per config key per client for a read that returned no value (type mismatch,
+    // malformed value, unset ENV_VAR, decryption failure), shared with IsFeatureEnabled so a broken
+    // key logs once, not once per getter (qfg-2agi.17, qfg-zvyy). Names the key, never the value.
+    private void WarnReadFailureOnce(string key, QuonfigException resolveError)
+    {
+        if (!_resolveErrorWarned.TryAdd(key, 0)) return;
+        // A coercion message can carry a parser message that quotes the value (a stored value
+        // can be sensitive too), so log a fixed reason instead.
+        var why = resolveError is QuonfigCoercionException
+            ? "value cannot be converted to the config's declared type"
+            : resolveError.Message;
+        _logger.LogWarning(
+            "quonfig: config \"{Key}\" could not be resolved ({ErrorType}): {Reason}; returning default",
+            key, resolveError.GetType().Name, why);
     }
 
     private EvaluationDetails<T> ApplyOnNoDefault<T>(string key, T defaultValue, EvaluationDetails<T> details, bool raise)
@@ -2366,14 +2395,31 @@ public sealed class Quonfig : IQuonfig
         _ => "default",
     };
 
-    private static bool IsCompatible(EvalValueType actual, EvalValueType requested)
+    // The largest integer a double holds exactly (2^53-1). An int read of a stored double succeeds
+    // only within +/-MaxSafeInt, matching the int grammar `qfg verify` enforces (qfg-zvyy).
+    internal const double MaxSafeInt = 9007199254740991d;
+
+    // Typed-getter contract (qfg-zvyy): no string coercion, and only the safe numeric conversions.
+    // A double getter reads an int (30 -> 30.0); an int getter reads a double only when it is
+    // whole and within +/-(2^53-1) (3.0 -> 3). 3.9, 1e300 and NaN are type mismatches: an int read
+    // never truncates. A malformed stored int or double (kept as its raw text) passes here and the
+    // coercer reports it as unable to coerce.
+    private static bool IsCompatible(Value value, EvalValueType requested)
     {
+        var actual = value.Type;
         if (actual == requested) return true;
         // log_level rows are STRING-shaped on the wire; allow string getters to read them.
         if (requested == EvalValueType.String && actual == EvalValueType.LogLevel) return true;
-        if (requested == EvalValueType.String && actual == EvalValueType.Duration) return true;
+        if (requested == EvalValueType.Double && actual == EvalValueType.Int) return true;
+        if (requested == EvalValueType.Int && actual == EvalValueType.Double)
+        {
+            return value.Payload is not double d || IsSafeWhole(d);
+        }
         return false;
     }
+
+    internal static bool IsSafeWhole(double d) =>
+        !double.IsNaN(d) && !double.IsInfinity(d) && Math.Floor(d) == d && Math.Abs(d) <= MaxSafeInt;
 
     /// <summary>Internal: per-call merge of base + overlay. Overlay wins on key collision.</summary>
     internal static ContextSet? MergeContexts(ContextSet? baseCtx, ContextSet? overlay)
@@ -2445,37 +2491,33 @@ public sealed class Quonfig : IQuonfig
 
     // ---------------- Coercion helpers ----------------
 
+    // The coercers run after IsCompatible, so they see only a value of the requested type (or a
+    // safe int<->double conversion). A payload of any other CLR type is a malformed stored value
+    // and throws FormatException / InvalidCastException, which TypedDetailsRaw reports as
+    // QuonfigCoercionException (qfg-zvyy). None of them parse strings.
     private static string? CoerceString(object? payload) => payload switch
     {
         null => null,
         string s => s,
-        TimeSpan t => System.Xml.XmlConvert.ToString(t),
-        _ => payload.ToString(),
+        _ => throw new InvalidCastException("payload is not a string"),
     };
 
-    private static int? CoerceInt(object? payload) => payload switch
-    {
-        null => null,
-        int i => i,
-        long l => checked((int)l),
-        double d => checked((int)d),
-        _ => Convert.ToInt32(payload, System.Globalization.CultureInfo.InvariantCulture),
-    };
+    private static int? CoerceInt(object? payload) => CoerceLong(payload) is long l ? checked((int)l) : null;
 
     private static long? CoerceLong(object? payload) => payload switch
     {
         null => null,
         long l => l,
         int i => (long)i,
-        double d => checked((long)d),
-        _ => Convert.ToInt64(payload, System.Globalization.CultureInfo.InvariantCulture),
+        double d when IsSafeWhole(d) => (long)d,
+        _ => throw new FormatException("stored value is not an int"),
     };
 
     private static bool? CoerceBoolNullable(object? payload) => payload switch
     {
         null => null,
         bool b => b,
-        _ => Convert.ToBoolean(payload, System.Globalization.CultureInfo.InvariantCulture),
+        _ => throw new InvalidCastException("payload is not a bool"),
     };
 
     private static bool CoerceBool(object? payload) => payload switch
@@ -2491,7 +2533,7 @@ public sealed class Quonfig : IQuonfig
         double d => d,
         long l => (double)l,
         int i => (double)i,
-        _ => Convert.ToDouble(payload, System.Globalization.CultureInfo.InvariantCulture),
+        _ => throw new FormatException("stored value is not a double"),
     };
 
     private static IReadOnlyList<string>? CoerceStringList(object? payload) => payload switch

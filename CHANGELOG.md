@@ -1,5 +1,56 @@
 # Changelog
 
+## 1.11.0 - 2026-10-26
+
+The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by the
+integration-test-data matrix (`getter.contract.*`, tag `v2026.10.23`). In .NET this release mostly
+widens what the typed getters accept; the default-or-null behavior on a wrong type is unchanged.
+
+### UPGRADE to 1.11
+
+1. **Int and double read each other safely.** `GetDouble` on an int config now returns it
+   (`30` -> `30.0`); it returned your default before. `GetLong` / `GetInt` on a double config now
+   return the value when it is whole and within +/-(2^53-1) (`3.0` -> `3`). A fractional or
+   out-of-range double (`3.9`, `1e300`, `2^53`) is a type mismatch and returns your default; it is
+   never truncated.
+2. **`GetString` on a duration config is a type mismatch.** It returned the ISO 8601 text (for
+   example `PT1S`) before; it now returns your default. Read durations with `GetDuration`. The
+   same applies to the OpenFeature provider's string resolution of a duration config.
+3. **Malformed stored ints and doubles.** A stored int or double that does not parse (for example
+   `"twelve"`) used to load as `0`, so every read silently got `0`. The config now loads with its
+   raw text and a typed read returns your default (or throws `QuonfigCoercionException` under
+   `OnNoDefault.Throw` with no default), the same as a malformed ENV_VAR value or duration.
+4. **Wrong-type reads under `OnNoDefault.Throw` throw.** A typed getter with no `defaultValue`
+   under `OnNoDefault.Throw` (the default) used to return `null` silently on a wrong-type value. It
+   now throws the new `QuonfigTypeMismatchException`. Pass a `defaultValue` (or use
+   `OnNoDefault.Ignore` / `Warn`) to keep getting `null`. A call with a `defaultValue` still
+   returns it.
+5. **One warning per key.** A type mismatch, a malformed value, an unset ENV_VAR or a decryption
+   failure logs one `Warning` per key per client (it names the key, never the value). A type
+   mismatch was silent before. `IsFeatureEnabled` now also logs once per key when it returns
+   `false` because the key is missing, no rule matched, the value is not a bool, or the value could
+   not be resolved. It still never throws.
+6. **A wrong decryption key degrades to defaults.** With a `defaultValue`, a decryption failure
+   returns your default and logs one warning per key, as in 1.10. If your app must fail hard on a
+   bad key, read the secret with no `defaultValue` under `OnNoDefault.Throw`: it throws
+   `QuonfigDecryptionException`.
+
+### Added
+
+- `Quonfig.Sdk.Exceptions.QuonfigTypeMismatchException` (a `QuonfigException`), thrown by a typed
+  getter with no `defaultValue` under `OnNoDefault.Throw` when the stored value has another type.
+  Maps to the `type_mismatch` error key in the cross-SDK suite.
+
+### Changed
+
+- Typed getters never coerce strings: `GetString` reads string and log_level configs;
+  `GetBool` bool; `GetStringList` string_list; `GetJson` json; `GetDuration` duration;
+  `GetLong` / `GetInt` int (and exact doubles); `GetDouble` double and int. Anything else is a
+  type mismatch (`Get*Details`: `Reason = Error`, `ErrorCode = TypeMismatch`).
+- Tests: the Test, Release, Chaos and Failover Chaos workflows pin integration-test-data
+  `v2026.10.23` (was `v2026.10.22.2`). It adds the typed-getter contract matrix: 116 `get`, 55
+  `get_or_raise` and 12 `enabled` cases, all generated against the public getters.
+
 ## 1.10.0 - 2026-10-23
 
 - **Changed (minor): a throw from your `OnConfigChange` or `OnConnectionStateChange` handler is now logged at Error, not Warning (qfg-6vno.21).** **UPGRADE: a throw from an `OnConfigChange` or `OnConnectionStateChange` handler now logs at Error (was Warning); if you alert on SDK Error logs, catch inside the handler.** The SDK still catches it, keeps running and still calls the remaining handlers. The log line now comes at `Error` with the exception and its stack trace, and reads `quonfig: OnConfigChange callback (onConfigUpdate) threw: ...` or `quonfig: OnConnectionStateChange callback threw: ...` (was `... handler threw: ...` at `Warning`). If you alert on SDK Error logs, a handler that throws on every update will now trigger it. A caught handler throw is not a worker restart and does not change `ConnectionState` or `LastSuccessfulRefresh`. The SDK also keeps an internal count of these throws per handler (`quonfig_sdk_callback_errors_total{callback=on_config_update|on_connection_state_change}`); it is read by the test suite only and is not public API. Pinned by supervisor contract Test 5 (integration-test-data `v2026.10.22.2`), the same rule as the other backend SDKs.

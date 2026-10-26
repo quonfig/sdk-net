@@ -134,6 +134,10 @@ public static class ConfigRowParser
         return new Criterion(propertyName, op, valueToMatch);
     }
 
+    // The stored text of a value that did not parse as its declared type.
+    private static string RawText(JsonElement el) =>
+        el.ValueKind == JsonValueKind.String ? el.GetString() ?? "" : el.GetRawText();
+
     /// <summary>
     /// Parses a wire <c>{"type":"&lt;tag&gt;","value":...}</c> object into a <see cref="Value"/>.
     /// Public so other callers (the resolver, tests) can lift a JSON node without re-implementing
@@ -166,11 +170,14 @@ public static class ConfigRowParser
             case "long":
                 if (valueEl.ValueKind == JsonValueKind.Number && valueEl.TryGetInt64(out var l)) return new Value(ValueType.Int, l, confidential, decryptWith);
                 if (valueEl.ValueKind == JsonValueKind.String && long.TryParse(valueEl.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var ls)) return new Value(ValueType.Int, ls, confidential, decryptWith);
-                return new Value(ValueType.Int, 0L, confidential, decryptWith);
+                // A malformed int (qfg-zvyy, qfg-zqoh) keeps its raw text so loading never fails and
+                // the typed getter reports it as unable to coerce, the same as a malformed duration.
+                return new Value(ValueType.Int, RawText(valueEl), confidential, decryptWith);
             case "double":
                 if (valueEl.ValueKind == JsonValueKind.Number) return new Value(ValueType.Double, valueEl.GetDouble(), confidential, decryptWith);
                 if (valueEl.ValueKind == JsonValueKind.String && double.TryParse(valueEl.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) return new Value(ValueType.Double, d, confidential, decryptWith);
-                return new Value(ValueType.Double, 0d, confidential, decryptWith);
+                // A malformed double keeps its raw text, like a malformed int (qfg-zvyy).
+                return new Value(ValueType.Double, RawText(valueEl), confidential, decryptWith);
             case "string":
                 return new Value(ValueType.String, valueEl.GetString() ?? "", confidential, decryptWith);
             case "string_list":
