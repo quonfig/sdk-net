@@ -3,8 +3,13 @@
 ## 1.11.0 - 2026-10-26
 
 The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by the
-integration-test-data matrix (`getter.contract.*`, tag `v2026.10.23`). In .NET this release mostly
-widens what the typed getters accept; the default-or-null behavior on a wrong type is unchanged.
+integration-test-data matrix (`getter.contract.*`, tag `v2026.10.23`). In .NET this release widens
+what the typed getters accept (items 1 and 5). It also changes existing behavior in four places:
+a duration read as a string (item 2), a malformed stored int or double (item 3), a wrong-type read
+with no default under `OnNoDefault.Throw` (item 4), and the `Get*Details` error code for a
+malformed ENV_VAR value (item 7). These match the other SDKs' majors; .NET ships them in a minor
+because, apart from items 2 and 3, a call that passes a `defaultValue` gets the same result as in
+1.10.
 
 ### UPGRADE to 1.11
 
@@ -34,6 +39,10 @@ widens what the typed getters accept; the default-or-null behavior on a wrong ty
    returns your default and logs one warning per key, as in 1.10. If your app must fail hard on a
    bad key, read the secret with no `defaultValue` under `OnNoDefault.Throw`: it throws
    `QuonfigDecryptionException`.
+7. **`Get*Details` on a malformed ENV_VAR value reports `ErrorCode.TypeMismatch`.** It reported
+   `ErrorCode.General` before. A malformed stored value already reports `TypeMismatch`, so both
+   kinds of malformed value now agree (sdk-go does the same). An unset ENV_VAR and a decryption
+   failure still report `ErrorCode.General`.
 
 ### Added
 

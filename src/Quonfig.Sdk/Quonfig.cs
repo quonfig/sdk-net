@@ -2146,7 +2146,10 @@ public sealed class Quonfig : IQuonfig
         catch (QuonfigException ex)
         {
             resolveError = ex;
-            return RowErrorDetails(cfg, fallback, ErrorCode.General, ex.Message);
+            // A malformed ENV_VAR value is a type mismatch, like a malformed stored value; an unset
+            // ENV_VAR or a decryption failure stays General. Matches sdk-go errorCodeFor (qfg-zvyy).
+            var code = ex is QuonfigCoercionException ? ErrorCode.TypeMismatch : ErrorCode.General;
+            return RowErrorDetails(cfg, fallback, code, ex.Message);
         }
 #pragma warning disable CA1031 // crash containment at the eval boundary
         catch (Exception ex)
