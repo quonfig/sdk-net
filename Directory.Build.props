@@ -2,7 +2,7 @@
 
   <PropertyGroup Label="Versioning">
     <!-- Single source of truth for all packaged projects. Bump in lock-step. -->
-    <Version>1.10.0</Version>
+    <Version>2.0.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Label="LanguageAndNullability">

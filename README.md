@@ -21,7 +21,7 @@ dotnet add package Quonfig.Sdk.Serilog
 Or via `<PackageReference>`:
 
 ```xml
-<PackageReference Include="Quonfig.Sdk" Version="1.10.0" />
+<PackageReference Include="Quonfig.Sdk" Version="2.0.0" />
 ```
 
 ## Packages
@@ -34,6 +34,30 @@ This repo publishes four NuGet packages in lock-step from a single tag.
 | `Quonfig.Sdk.AspNetCore`             | DI + `IHostedService` + per-request `ContextSet` via `HttpContext`.                                     |
 | `Quonfig.Sdk.Extensions.Logging`     | `ILoggerProvider` filter — dynamic log levels via the BCL `Microsoft.Extensions.Logging` pipeline.      |
 | `Quonfig.Sdk.Serilog`                | Serilog `LoggingLevelSwitch` provider for dynamic log levels.                                            |
+
+## Typed getters
+
+`GetString`, `GetInt`, `GetLong`, `GetBool`, `GetDouble`, `GetStringList`, `GetJson` and
+`GetDuration` return the value only when it has the getter's type. This is the typed-getter
+contract every Quonfig SDK follows.
+
+- **No string coercion.** A stored string `"false"` is not a bool, and `"3"` is not an int.
+- **Safe number conversions only.** `GetDouble` reads an int config (`30` -> `30.0`).
+  `GetLong` / `GetInt` read a double config only when it is whole and within +/-(2^53-1)
+  (`3.0` -> `3`). `3.9` or `1e300` is a type mismatch. Reads never truncate.
+- **A failed read returns your default.** A wrong-type value, a malformed stored value, an unset
+  ENV_VAR or a decryption failure returns `defaultValue` (or `null` when you pass none) and logs
+  one warning per key per client. The warning names the key, never the value.
+- **Hard failure on request.** With no `defaultValue` and `OnNoDefault = OnNoDefault.Throw` (the
+  default), a failed read throws: `QuonfigTypeMismatchException`, `QuonfigCoercionException`,
+  `QuonfigEnvVarNotSetException` or `QuonfigDecryptionException`. Use this form for values your
+  app cannot run without, such as secrets: a wrong decryption key then fails loudly instead of
+  serving defaults.
+- **`IsFeatureEnabled` never throws.** It is true only for a resolved bool `true`. A missing
+  key, a flag with no matching rule, a non-bool value or a resolution error returns `false` and
+  logs once per key.
+- **`Get*Details` never throw.** A wrong-type or malformed value reports `Reason = Error` and
+  `ErrorCode = TypeMismatch`, with your default as the value.
 
 ## Startup failure (`InitTimeout` / `OnInitFailure`)
 

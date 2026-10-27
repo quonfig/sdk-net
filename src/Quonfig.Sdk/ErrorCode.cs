@@ -11,7 +11,10 @@ public enum ErrorCode
     /// <summary>No config exists for the requested key.</summary>
     FlagNotFound,
 
-    /// <summary>The config exists but its declared <c>valueType</c> does not match the typed getter called.</summary>
+    /// <summary>
+    /// The config exists but its value cannot be read as the typed getter's type: another declared
+    /// <c>valueType</c>, or a malformed stored or ENV_VAR value (for example an int <c>"twelve"</c>).
+    /// </summary>
     TypeMismatch,
 
     /// <summary>Internal evaluation failure not covered by another code (env var missing, decryption, …).</summary>

@@ -131,9 +131,9 @@ public sealed class DetailsNeverThrowTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var client = await NewClientAsync(logger);
-        ShouldBeError(client.GetIntDetails(BadIntEnvKey), ErrorCode.General);
-        ShouldBeError(client.GetIntDetails(BadIntEnvKey), ErrorCode.General);
-        ShouldBeError(client.GetDurationDetails(BadDurationEnvKey), ErrorCode.General);
+        ShouldBeError(client.GetIntDetails(BadIntEnvKey), ErrorCode.TypeMismatch);
+        ShouldBeError(client.GetIntDetails(BadIntEnvKey), ErrorCode.TypeMismatch);
+        ShouldBeError(client.GetDurationDetails(BadDurationEnvKey), ErrorCode.TypeMismatch);
         Warnings(logger, BadIntEnvKey).Should().HaveCount(1);
         Warnings(logger, BadDurationEnvKey).Should().HaveCount(1);
     }
@@ -179,7 +179,7 @@ public sealed class DetailsNeverThrowTests : IDisposable
     {
         await using var client = await NewClientAsync();
         var bound = client.WithContext(new ContextSet());
-        ShouldBeError(bound.GetIntDetails(BadIntEnvKey), ErrorCode.General);
+        ShouldBeError(bound.GetIntDetails(BadIntEnvKey), ErrorCode.TypeMismatch);
         ShouldBeError(bound.GetStringDetails(NotThereKey), ErrorCode.FlagNotFound);
     }
 

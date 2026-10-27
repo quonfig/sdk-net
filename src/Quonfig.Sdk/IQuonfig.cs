@@ -51,20 +51,29 @@ public interface IQuonfig : IAsyncDisposable
     event Action? OnConfigChange;
 
     // ---- typed getters ----
+    //
+    // Typed-getter contract (qfg-zvyy), shared by every Quonfig SDK. A getter returns the value
+    // only when it has the getter's type. Strings are never coerced: a stored "false" is not a
+    // bool and "3" is not an int. The only conversions are int -> double (30 -> 30.0) and a whole
+    // double within +/-(2^53-1) -> int (3.0 -> 3); 3.9 or 1e300 is a type mismatch, never
+    // truncated. A wrong-type, malformed, unset-ENV_VAR or undecryptable value returns
+    // defaultValue (or null) and logs one warning per key per client. With no defaultValue under
+    // OnNoDefault.Throw the getter throws instead: QuonfigTypeMismatchException,
+    // QuonfigCoercionException, QuonfigEnvVarNotSetException or QuonfigDecryptionException.
 
-    /// <summary>Returns the resolved string value of <paramref name="key"/>, or <paramref name="defaultValue"/> when missing.</summary>
+    /// <summary>Returns the value of a string (or log_level) config, or <paramref name="defaultValue"/> when missing or of another type.</summary>
     string? GetString(string key, ContextSet? contexts = null, string? defaultValue = null);
 
-    /// <summary>Returns the resolved int value (the wire-format int type is 64-bit; this getter narrows to <see cref="int"/>).</summary>
+    /// <summary>Returns the value of an int config, or of a double config holding a whole number (the wire-format int type is 64-bit; this getter narrows to <see cref="int"/>).</summary>
     int? GetInt(string key, ContextSet? contexts = null, int? defaultValue = null);
 
-    /// <summary>Returns the resolved long (64-bit int) value.</summary>
+    /// <summary>Returns the value of an int config, or of a double config holding a whole number within +/-(2^53-1). Never truncates.</summary>
     long? GetLong(string key, ContextSet? contexts = null, long? defaultValue = null);
 
     /// <summary>Returns the resolved boolean value.</summary>
     bool? GetBool(string key, ContextSet? contexts = null, bool? defaultValue = null);
 
-    /// <summary>Returns the resolved double value.</summary>
+    /// <summary>Returns the value of a double config, or of an int config converted to double.</summary>
     double? GetDouble(string key, ContextSet? contexts = null, double? defaultValue = null);
 
     /// <summary>Returns the resolved string-list value.</summary>
@@ -77,8 +86,10 @@ public interface IQuonfig : IAsyncDisposable
     TimeSpan? GetDuration(string key, ContextSet? contexts = null, TimeSpan? defaultValue = null);
 
     /// <summary>
-    /// Always returns a bool — never throws. Defaults to <c>false</c> when the key is missing or
-    /// evaluation produces a non-bool. Bypasses <see cref="OnNoDefault"/> entirely.
+    /// Always returns a bool — never throws. True only for a resolved bool <c>true</c>. Returns
+    /// <c>false</c>, and logs a warning once per key, when the key is missing, no rule matches, the
+    /// value is not a bool, or the value cannot be resolved (unset ENV_VAR, decryption failure).
+    /// Bypasses <see cref="OnNoDefault"/> entirely.
     /// </summary>
     bool IsFeatureEnabled(string key, ContextSet? contexts = null);
 

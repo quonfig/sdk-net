@@ -540,4 +540,613 @@ public sealed class GetOrRaiseTests
         });
         Assert.Throws<QuonfigCoercionException>(() => client.GetDuration("test.duration.malformed.empty"));
     }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored int raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredIntRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.int"));
+    }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored double raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredDoubleRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored bool raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored string_list raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored json raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "STRING get_or_raise on stored duration raises type_mismatch")]
+    public async Task StringGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetString("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored string raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored double 3.9 raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredDouble39RaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored bool raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored string_list raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored json raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored duration raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored string raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored bool raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored string_list raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored json raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored duration raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored string raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored int raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredIntRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.int"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored double raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredDoubleRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored string_list raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored json raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored duration raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored string raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored int raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredIntRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.int"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored double raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredDoubleRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored bool raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored json raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "STRING_LIST get_or_raise on stored duration raises type_mismatch")]
+    public async Task StringListGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetStringList("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored string raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored int raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredIntRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.int"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored double raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredDoubleRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored bool raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored string_list raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "JSON get_or_raise on stored duration raises type_mismatch")]
+    public async Task JsonGetOrRaiseOnStoredDurationRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetJson("getter.contract.duration"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored string raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredStringRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.string"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored int raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredIntRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.int"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored double raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredDoubleRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.double"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored bool raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredBoolRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.bool"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored string_list raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredStringListRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.string_list"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored json raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredJsonRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.json"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored string \"false\" raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredStringFalseRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.string.false"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on stored string \"true\" raises type_mismatch")]
+    public async Task BooleanGetOrRaiseOnStoredStringTrueRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetBool("getter.contract.string.true"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored string \"3\" raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredString3RaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.string.number"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored string \"3\" raises type_mismatch")]
+    public async Task DoubleGetOrRaiseOnStoredString3RaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDouble("getter.contract.string.number"));
+    }
+
+    [Fact(DisplayName = "DURATION get_or_raise on stored string \"PT1S\" raises type_mismatch")]
+    public async Task DurationGetOrRaiseOnStoredStringPt1sRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetDuration("getter.contract.string.duration"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored int 30 returns 30.0")]
+    public async Task DoubleGetOrRaiseOnStoredInt30Returns300()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetDouble("getter.contract.int");
+        TestSetup.AssertDoubleEquals(30d, actual);
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored whole double 3.0 returns 3")]
+    public async Task IntGetOrRaiseOnStoredWholeDouble30Returns3()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetLong("getter.contract.double.whole");
+        Assert.Equal(3L, actual);
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored double 1e300 raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredDouble1e300RaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.double.huge"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored double 2^53 (outside the safe int range) raises type_mismatch")]
+    public async Task IntGetOrRaiseOnStoredDouble253OutsideTheSafeIntRangeRaisesTypeMismatch()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigTypeMismatchException>(() => client.GetLong("getter.contract.double.unsafe"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on stored malformed int \"twelve\" raises unable_to_coerce_env_var")]
+    public async Task IntGetOrRaiseOnStoredMalformedIntTwelveRaisesUnableToCoerceEnvVar()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetLong("getter.contract.int.malformed"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on stored malformed double \"abc\" raises unable_to_coerce_env_var")]
+    public async Task DoubleGetOrRaiseOnStoredMalformedDoubleAbcRaisesUnableToCoerceEnvVar()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDouble("getter.contract.double.malformed"));
+    }
+
+    [Fact(DisplayName = "INT get_or_raise on env-var-provided malformed int \"twelve\" raises unable_to_coerce_env_var")]
+    public async Task IntGetOrRaiseOnEnvVarProvidedMalformedIntTwelveRaisesUnableToCoerceEnvVar()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_GETTER_INT", "twelve");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetLong("getter.contract.provided.int.malformed"));
+    }
+
+    [Fact(DisplayName = "DOUBLE get_or_raise on env-var-provided malformed double \"abc\" raises unable_to_coerce_env_var")]
+    public async Task DoubleGetOrRaiseOnEnvVarProvidedMalformedDoubleAbcRaisesUnableToCoerceEnvVar()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_GETTER_DOUBLE", "abc");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigCoercionException>(() => client.GetDouble("getter.contract.provided.double.malformed"));
+    }
+
+    [Fact(DisplayName = "BOOLEAN get_or_raise on a missing bool env var raises missing_env_var")]
+    public async Task BooleanGetOrRaiseOnAMissingBoolEnvVarRaisesMissingEnvVar()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigEnvVarNotSetException>(() => client.GetBool("getter.contract.provided.bool.missing"));
+    }
 }

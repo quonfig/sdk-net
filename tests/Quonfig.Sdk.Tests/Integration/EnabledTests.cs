@@ -1836,4 +1836,149 @@ public sealed class EnabledTests
         var actual = scoped.IsFeatureEnabled("feature-flag.greater-than");
         Assert.False(actual);
     }
+
+    [Fact(DisplayName = "enabled on stored bool true returns true")]
+    public async Task EnabledOnStoredBoolTrueReturnsTrue()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.bool");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "enabled on env-var-provided bool \"true\" returns true")]
+    public async Task EnabledOnEnvVarProvidedBoolTrueReturnsTrue()
+    {
+        using var env = TestSetup.Env("QUONFIG_ITD_GETTER_BOOL", "true");
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.provided.bool");
+        Assert.True(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored string returns false")]
+    public async Task EnabledOnStoredStringReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.string");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored int returns false")]
+    public async Task EnabledOnStoredIntReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.int");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored double returns false")]
+    public async Task EnabledOnStoredDoubleReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.double");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored string_list returns false")]
+    public async Task EnabledOnStoredStringListReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.string_list");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored json returns false")]
+    public async Task EnabledOnStoredJsonReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.json");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored duration returns false")]
+    public async Task EnabledOnStoredDurationReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.duration");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored string \"true\" returns false")]
+    public async Task EnabledOnStoredStringTrueReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.string.true");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on stored malformed int \"twelve\" returns false")]
+    public async Task EnabledOnStoredMalformedIntTwelveReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.int.malformed");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on a missing bool env var returns false")]
+    public async Task EnabledOnAMissingBoolEnvVarReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("getter.contract.provided.bool.missing");
+        Assert.False(actual);
+    }
+
+    [Fact(DisplayName = "enabled on a decryption failure returns false")]
+    public async Task EnabledOnADecryptionFailureReturnsFalse()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.IsFeatureEnabled("a.broken.secret.config");
+        Assert.False(actual);
+    }
 }
