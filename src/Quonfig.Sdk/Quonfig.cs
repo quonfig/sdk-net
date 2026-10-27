@@ -1360,6 +1360,10 @@ public sealed class Quonfig : IQuonfig
                         // fetch itself succeeded (liveness already stamped above) — only the install was a
                         // no-op.
                         _failover?.RecordGuardRejected();
+                        // Forget its ETag, exactly as for a gen<=0 payload: a shallow-clone server can
+                        // repair the generation for the SAME sha, and a remembered ETag would 304 the
+                        // repaired payload until the next commit (qfg-j7ui, supervisor contract Test 11).
+                        transport.ForgetETag(leg.LegIndex, leg.ETag);
                     }
                     // NetworkInstallOutcome.RejectedSameGeneration: the server answered with the config we
                     // already hold (a cold per-leg ETag slot on a fresh transport / reconnect, or the

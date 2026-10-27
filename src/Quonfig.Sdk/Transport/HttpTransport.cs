@@ -579,9 +579,10 @@ public sealed class HttpTransport : IDisposable
 
     /// <summary>
     /// Clears leg <paramref name="legIndex"/>'s ETag slot if it still holds <paramref name="etag"/>.
-    /// Called when the install guard ignored that leg's gen&lt;=0 payload: api-delivery can repair the
-    /// generation for the SAME sha (same ETag), so a remembered ETag would turn the repaired payload
-    /// into a 304 until the next commit (qfg-9dxb.9 follow-up). Compare-and-clear so a newer ETag
+    /// Called when the install guard dropped that leg's payload as strictly older or as gen&lt;=0:
+    /// api-delivery can repair the generation for the SAME sha (same ETag), so a remembered ETag would
+    /// turn the repaired payload into a 304 until the next commit (qfg-9dxb.9 follow-up, qfg-j7ui).
+    /// Compare-and-clear so a newer ETag
     /// written by an overlapping cycle is left alone.
     /// </summary>
     internal void ForgetETag(int legIndex, string? etag)
