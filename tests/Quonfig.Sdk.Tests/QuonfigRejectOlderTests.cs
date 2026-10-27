@@ -179,6 +179,60 @@ public sealed class QuonfigRejectOlderTests
     }
 
     /// <summary>
+    /// qfg-j7ui (supervisor contract Test 11): a 200 the reject-older guard drops as STRICTLY older
+    /// must not leave its ETag remembered either. A shallow-clone server can serve sha B at a low
+    /// generation and later repair it to a higher one for the SAME sha, so a pinned ETag would 304
+    /// the repaired payload until the next commit.
+    /// </summary>
+    [Fact]
+    public async Task RejectedOlderSnapshot_DoesNotPinItsETag()
+    {
+        using var server = WireMockServer.Start();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaA\"")
+                .WithBody(MarkerEnvelopeJson(10, "A")));
+
+        await using var client = NewClient(server);
+        await client.InitAsync();
+        client.GetString("marker").Should().Be("A");
+        client.HeldGeneration.Should().Be(10);
+
+        // Shallow-clone server: sha B at generation 3 — rejected as older.
+        server.Reset();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaB\"")
+                .WithBody(MarkerEnvelopeJson(3, "B")));
+        await client.RefreshAsync();
+        client.GetString("marker").Should().Be("A", "generation 3 is older than the held generation 10");
+        client.HeldGeneration.Should().Be(10);
+
+        // Repaired server: the SAME sha B, now at generation 11. It answers 304 to If-None-Match "shaB".
+        server.Reset();
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet()
+                .WithHeader("If-None-Match", "\"shaB\""))
+            .AtPriority(1)
+            .RespondWith(Response.Create().WithStatusCode(304).WithHeader("ETag", "\"shaB\""));
+        server
+            .Given(Request.Create().WithPath("/api/v2/configs").UsingGet())
+            .AtPriority(10)
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "application/json")
+                .WithHeader("ETag", "\"shaB\"")
+                .WithBody(MarkerEnvelopeJson(11, "B")));
+        await client.RefreshAsync();
+
+        client.GetString("marker").Should().Be("B", "the rejected-older response's ETag must not turn the repaired gen-11 payload into a 304");
+        client.HeldGeneration.Should().Be(11);
+    }
+
+    /// <summary>
     /// qfg-9dxb.9: a client that has only ever seen generation 0 (held == 0, never a real generation)
     /// keeps installing each gen-0 payload, so it never freezes on stale config.
     /// </summary>
