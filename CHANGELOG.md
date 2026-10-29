@@ -4,9 +4,12 @@
 
 ### Added
 
-- **`EvaluateDetails(string key, ContextSet? contexts = null)`** on `IQuonfig` / `Quonfig`, and
-  **`EvaluateDetails(string key)`** on `IBoundQuonfig` / `BoundQuonfig` (qfg-177f). An untyped
-  details read that matches sdk-go's `Client.EvaluateDetails`. It returns
+- **`IQuonfigDetailsReader`**, a new interface with one method,
+  `EvaluateDetails(string key, ContextSet? contexts = null)` (qfg-177f). `Quonfig` and
+  `BoundQuonfig` implement it; on a bound view the per-call contexts layer on the bound context.
+  `IQuonfig` and `IBoundQuonfig` are unchanged, so existing implementers are unaffected. Code that
+  holds an `IQuonfig` reaches it with `if (client is IQuonfigDetailsReader reader)`. It is an
+  untyped details read that matches sdk-go's `Client.EvaluateDetails`. It returns
   `EvaluationDetails<object?>` with the resolved value in its stored form (after ENV_VAR
   provisioning and decryption) and the same reason, variant, metadata and telemetry as the typed
   `Get*Details` getters. A duration is its ISO 8601 text exactly as stored (`"PT90S"`, not a
@@ -19,10 +22,6 @@
   config's stored value type as its wire name (`"duration"`, `"string_list"`, ...), set by
   `EvaluateDetails` whenever the key exists and null when it is not found, matching sdk-node's
   `valueType`. The typed `Get*Details` getters leave it null.
-
-  Adding a member to `IQuonfig` and `IBoundQuonfig` means a class that implements either interface
-  itself (rather than using `Quonfig` or a mocking library) must add `EvaluateDetails` to compile
-  against 2.1.0. Default interface methods are not available on the `netstandard2.0` target.
 
 ## 2.0.0 - 2026-10-26
 

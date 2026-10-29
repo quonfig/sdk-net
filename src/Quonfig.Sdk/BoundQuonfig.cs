@@ -9,7 +9,7 @@ namespace Quonfig.Sdk;
 /// bound context per named context: a supplied named context replaces the whole same-named bound
 /// context, and named contexts it does not mention are kept (same precedence as sdk-go / sdk-java).
 /// </summary>
-public sealed class BoundQuonfig : IBoundQuonfig
+public sealed class BoundQuonfig : IBoundQuonfig, IQuonfigDetailsReader
 {
     private readonly Quonfig _client;
     private readonly ContextSet _bound;
@@ -104,6 +104,6 @@ public sealed class BoundQuonfig : IBoundQuonfig
         _client.GetDurationDetails(key, _bound, defaultValue);
 
     /// <inheritdoc/>
-    public EvaluationDetails<object?> EvaluateDetails(string key) =>
-        _client.EvaluateDetails(key, _bound);
+    public EvaluationDetails<object?> EvaluateDetails(string key, ContextSet? contexts = null) =>
+        _client.EvaluateDetails(key, Quonfig.MergeContexts(_bound, contexts));
 }

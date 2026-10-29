@@ -112,7 +112,7 @@ public sealed class EvaluationDetails<T>
     /// <summary>
     /// The config's stored value type as its wire name (<c>"duration"</c>, <c>"string_list"</c>,
     /// <c>"int"</c>, ...), as declared in the config file. Set by the untyped
-    /// <see cref="IQuonfig.EvaluateDetails"/> whenever the key exists, including when the value
+    /// <see cref="IQuonfigDetailsReader.EvaluateDetails"/> whenever the key exists, including when the value
     /// cannot be resolved; null when the key is not found. Null from the typed <c>Get*Details</c>
     /// getters, whose type is the getter's (qfg-177f, matching sdk-node's <c>valueType</c>).
     /// </summary>

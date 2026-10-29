@@ -133,19 +133,4 @@ public interface IQuonfig : IAsyncDisposable
 
     /// <summary>Full <see cref="EvaluationDetails{T}"/> for <see cref="GetDuration"/>.</summary>
     EvaluationDetails<TimeSpan?> GetDurationDetails(string key, ContextSet? contexts = null, TimeSpan? defaultValue = null);
-
-    /// <summary>
-    /// Untyped details read (qfg-177f), matching sdk-go's <c>Client.EvaluateDetails</c>. Returns
-    /// the resolved value in its stored form, after ENV_VAR provisioning and decryption, with the
-    /// same reason, variant, metadata and telemetry as the typed <c>Get*Details</c> getters. A
-    /// duration is its ISO 8601 text exactly as stored (<c>"PT90S"</c>), a string list is an
-    /// <see cref="IReadOnlyList{T}"/> of string, an int is a <see cref="long"/>, a double a
-    /// <see cref="double"/>, JSON the same tree <see cref="GetJson"/> returns. There is no type
-    /// check, no coercion and no parse validation: a stored value that a typed getter rejects is
-    /// returned as stored with a success reason. Metadata <c>configType</c> names the stored type.
-    /// Never throws: a missing key returns a null value with <see cref="Reason.Error"/> and
-    /// <see cref="ErrorCode.FlagNotFound"/>, and an unresolvable value (unset or malformed
-    /// ENV_VAR, decryption failure) returns null with the same error code a typed getter reports.
-    /// </summary>
-    EvaluationDetails<object?> EvaluateDetails(string key, ContextSet? contexts = null);
 }

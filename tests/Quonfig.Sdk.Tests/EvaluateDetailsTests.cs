@@ -8,7 +8,7 @@ using Xunit;
 namespace Quonfig.Sdk.Tests;
 
 /// <summary>
-/// qfg-177f: <see cref="IQuonfig.EvaluateDetails"/> is the untyped details read, matching sdk-go's
+/// qfg-177f: <see cref="IQuonfigDetailsReader.EvaluateDetails"/> is the untyped details read, matching sdk-go's
 /// <c>Client.EvaluateDetails</c>. It returns the resolved value in its stored form (a duration
 /// is its ISO 8601 text exactly as stored) with the same reason, variant and metadata as the
 /// typed Get*Details getters. It runs no type check, no coercion and no parse validation, and
@@ -133,9 +133,33 @@ public sealed class EvaluateDetailsTests : IDisposable
     {
         await using var client = await NewClientAsync();
         var bound = client.WithContext(User("u1", "pro"));
-        var d = bound.EvaluateDetails("dur.targeted");
+        var reader = bound.Should().BeAssignableTo<IQuonfigDetailsReader>().Subject;
+        var d = reader.EvaluateDetails("dur.targeted");
         d.Value.Should().Be("PT5M");
         d.Variant.Should().Be(bound.GetDurationDetails("dur.targeted").Variant);
+
+        // Per-call contexts layer on the bound context; the per-call named context wins.
+        var free = reader.EvaluateDetails("dur.targeted", User("u1", "free"));
+        free.Value.Should().Be("PT1M");
+        free.Variant.Should().Be("targeting:1");
+    }
+
+    [Fact]
+    public async Task IQuonfig_ExposesReaderByTypeCheck()
+    {
+        await using var client = await NewClientAsync();
+        IQuonfig q = client;
+        (q is IQuonfigDetailsReader r ? r.EvaluateDetails("dur.static").Value : null).Should().Be("PT90S");
+    }
+
+    [Fact]
+    public void ExistingInterfaces_GainNoMembers()
+    {
+        // Purely additive for hand-written IQuonfig / IBoundQuonfig implementers (qfg-177f).
+        typeof(IQuonfig).GetMethod(nameof(IQuonfigDetailsReader.EvaluateDetails)).Should().BeNull();
+        typeof(IBoundQuonfig).GetMethod(nameof(IQuonfigDetailsReader.EvaluateDetails)).Should().BeNull();
+        typeof(IQuonfig).GetInterfaces().Should().NotContain(typeof(IQuonfigDetailsReader));
+        typeof(IBoundQuonfig).GetInterfaces().Should().NotContain(typeof(IQuonfigDetailsReader));
     }
 
     [Fact]
@@ -224,7 +248,7 @@ public sealed class EvaluateDetailsTests : IDisposable
         client.EvaluateDetails("dur.env").ValueType.Should().Be("duration");
         client.EvaluateDetails("list.static").ValueType.Should().Be("string_list");
         client.EvaluateDetails("int.static").ValueType.Should().Be("int");
-        client.WithContext(User("u1", "pro")).EvaluateDetails("dur.targeted").ValueType.Should().Be("duration");
+        ((IQuonfigDetailsReader)client.WithContext(User("u1", "pro"))).EvaluateDetails("dur.targeted").ValueType.Should().Be("duration");
         // Found but unresolvable: the stored type is still known.
         client.EvaluateDetails("dur.env-bad").ValueType.Should().Be("duration");
         client.EvaluateDetails("does.not.exist").ValueType.Should().BeNull();

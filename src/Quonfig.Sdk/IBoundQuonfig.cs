@@ -76,7 +76,4 @@ public interface IBoundQuonfig
 
     /// <summary>Detail variant of <see cref="GetDuration"/>.</summary>
     EvaluationDetails<TimeSpan?> GetDurationDetails(string key, TimeSpan? defaultValue = null);
-
-    /// <summary>Untyped details read (see <see cref="IQuonfig.EvaluateDetails"/>); bound context is applied.</summary>
-    EvaluationDetails<object?> EvaluateDetails(string key);
 }

@@ -61,14 +61,19 @@ contract every Quonfig SDK follows.
 
 ### Untyped details: `EvaluateDetails`
 
-`EvaluateDetails(key, contexts)` (also on `IBoundQuonfig`) returns the resolved value as it is
-stored, with the same reason, variant and metadata as the `Get*Details` getters. It runs no type
-check and no parse, so it suits integrations that pass values through, such as an OpenFeature
-provider. A duration is its ISO 8601 text exactly as stored:
+`EvaluateDetails(key, contexts)` on the `IQuonfigDetailsReader` interface returns the resolved
+value as it is stored, with the same reason, variant and metadata as the `Get*Details` getters.
+It runs no type check and no parse, so it suits integrations that pass values through, such as an
+OpenFeature provider. A duration is its ISO 8601 text exactly as stored:
 
 ```csharp
-var d = client.EvaluateDetails("http.timeout");
-// d.Value == "PT90S" (a string), d.Reason == Reason.Static, d.ValueType == "duration"
+// Quonfig and the bound view from WithContext implement IQuonfigDetailsReader.
+// Code that holds an IQuonfig reaches it with a type check:
+if (client is IQuonfigDetailsReader reader)
+{
+    var d = reader.EvaluateDetails("http.timeout");
+    // d.Value == "PT90S" (a string), d.Reason == Reason.Static, d.ValueType == "duration"
+}
 ```
 
 An int is a `long`, a double a `double`, a string list an `IReadOnlyList<string>`, and JSON the

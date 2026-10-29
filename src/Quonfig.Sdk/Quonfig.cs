@@ -43,7 +43,7 @@ namespace Quonfig.Sdk;
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Naming", "CA1724:Type names should not match namespaces",
     Justification = "Quonfig is the canonical client class under the Quonfig.Sdk namespace, mirroring the sdk-java type name (com.quonfig.sdk.Quonfig).")]
-public sealed class Quonfig : IQuonfig
+public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
 {
     /// <summary>
     /// Cross-SDK constant: when <see cref="ShouldLog"/> evaluates per-logger rules it injects the
