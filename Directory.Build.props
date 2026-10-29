@@ -5,6 +5,15 @@
     <Version>2.2.0</Version>
   </PropertyGroup>
 
+  <PropertyGroup Label="Restore">
+    <!-- Commit packages.lock.json per project so ssdlc / deps (osv-scanner) sees the resolved
+         dependency graph (qfg-66ko.19). A lock file only pins this repo's own restore; it is not
+         packed, so consumers resolve the .nuspec ranges as before. CI restores in locked mode, so
+         a dependency change must come with its regenerated lock file (`dotnet restore`). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
+  </PropertyGroup>
+
   <PropertyGroup Label="LanguageAndNullability">
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
