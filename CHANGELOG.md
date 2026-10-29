@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `CloseAsync()` called from an `OnConfigChange` handler fired by an SSE update now returns
+  promptly instead of after a 5 s timeout (qfg-6vno.22). The handler runs on the SSE reader task,
+  and `CloseAsync` was waiting on that same task. It now skips that wait when called from the SSE
+  delivery path (the cancellation still stops the loop once the handler returns) and disposes the
+  SSE client and its cancellation source after the loop has unwound. Every other `CloseAsync`
+  call is unchanged.
+
 ## 2.1.0 - 2026-10-29
 
 ### Added

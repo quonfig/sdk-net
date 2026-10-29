@@ -133,6 +133,11 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
     private volatile SseClient? _sseClient;
     private volatile HttpTransport? _httpTransport;
     private volatile Task? _sseRunTask;
+
+    // True only while OnConfigChange handlers fired by an SSE install run (on the SSE reader task),
+    // so CloseAsync called from one of them does not wait on the task running it (qfg-6vno.22).
+    // AsyncLocal so it survives an await inside an async handler.
+    private readonly AsyncLocal<bool> _inSseConfigChange = new();
     private CancellationTokenSource? _sseCts;
     // Guards _sseCts / _sseClient / _sseRunTask: SSE is stopped on entry to auth-failed and
     // restarted on exit (qfg-goi1.10.28), racing CloseAsync.
@@ -411,8 +416,11 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
             sseClient = _sseClient;
             sseTask = _sseRunTask;
         }
+        // Read before the first await: true only while an OnConfigChange handler fired by an SSE
+        // install is running, i.e. this call is on the SSE reader task itself (qfg-6vno.22).
+        bool onSseReader = _inSseConfigChange.Value && sseTask is not null && !sseTask.IsCompleted;
         try { sseCts?.Cancel(); } catch (ObjectDisposedException) { }
-        if (sseTask is not null)
+        if (sseTask is not null && !onSseReader)
         {
             try
             {
@@ -425,9 +433,28 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
         {
             await sup.StopAsync().ConfigureAwait(false);
         }
-        sseClient?.Dispose();
-        _httpTransport?.Dispose();
-        sseCts?.Dispose();
+        if (onSseReader)
+        {
+            // Called from inside the SSE delivery path: sseTask is the task running this handler, so
+            // waiting on it can only time out. The cancel above ends the loop once the handler
+            // returns; the client and CTS it still holds are disposed when it has unwound.
+            _ = sseTask!.ContinueWith(
+                _ =>
+                {
+                    sseClient?.Dispose();
+                    sseCts?.Dispose();
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            _httpTransport?.Dispose();
+        }
+        else
+        {
+            sseClient?.Dispose();
+            _httpTransport?.Dispose();
+            sseCts?.Dispose();
+        }
 
         // Stop the telemetry reporter last: DisposeAsync gives the live window (eval summaries, context
         // shapes, failover counters) one POST with a 5s deadline and never drains the retained queue,
@@ -1695,7 +1722,7 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
             // FetchAndInstallAsync, where an answered request with nothing newer IS a
             // successful refresh — there the CLIENT asked and the server answered; here the
             // server pushed something the guard had to discard.
-            var outcome = InstallFromNetwork(envelope, sourceIndex: -1);
+            var outcome = InstallFromNetwork(envelope, sourceIndex: -1, fromSseReader: true);
             if (outcome == NetworkInstallOutcome.Installed)
             {
                 _supervisor?.RecordSuccessfulRefresh();
@@ -1759,10 +1786,10 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
     /// <para><c>OnConfigChange</c> fires after <see cref="_installLock"/> is released, so a slow or
     /// re-entrant handler never stalls or deadlocks the other install paths (qfg-6vno.12).</para>
     /// </summary>
-    private NetworkInstallOutcome InstallFromNetwork(ConfigEnvelope envelope, int sourceIndex)
+    private NetworkInstallOutcome InstallFromNetwork(ConfigEnvelope envelope, int sourceIndex, bool fromSseReader = false)
     {
         var outcome = InstallFromNetworkLocked(envelope, sourceIndex);
-        DeliverConfigChanges();
+        DeliverConfigChanges(fromSseReader);
         return outcome;
     }
 
@@ -1890,6 +1917,9 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
     /// <summary>Test/diagnostic: whether the Layer 2 fallback poller is engaged right now.</summary>
     internal bool FallbackPollerActive => _fallbackPoller?.Active ?? false;
 
+    /// <summary>Internal, test-only: the current SSE reader task (kept after <see cref="CloseAsync"/>).</summary>
+    internal Task? SseRunTask => _sseRunTask;
+
     /// <summary>Layer 1 counters shared by every SSE stream this client starts (test-only, qfg-6vno.4).</summary>
     private readonly SseCounters _sseCounters = new();
 
@@ -2005,7 +2035,9 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
     /// drainer, so an install made from inside a handler (or concurrently on another thread) is
     /// delivered after the running handler returns, and never blocks on it. Mirrors sdk-go qfg-eefx.
     /// </summary>
-    private void DeliverConfigChanges()
+    /// <param name="fromSseReader">True when called on the SSE reader task, so the handlers it fires
+    /// run there and <see cref="CloseAsync"/> called from one must not wait on that task.</param>
+    private void DeliverConfigChanges(bool fromSseReader = false)
     {
         while (Volatile.Read(ref _pendingConfigChanges) > 0)
         {
@@ -2018,7 +2050,20 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
                 while (Volatile.Read(ref _pendingConfigChanges) > 0)
                 {
                     Interlocked.Decrement(ref _pendingConfigChanges);
-                    FireConfigChange();
+                    if (!fromSseReader)
+                    {
+                        FireConfigChange();
+                        continue;
+                    }
+                    _inSseConfigChange.Value = true;
+                    try
+                    {
+                        FireConfigChange();
+                    }
+                    finally
+                    {
+                        _inSseConfigChange.Value = false;
+                    }
                 }
             }
             finally

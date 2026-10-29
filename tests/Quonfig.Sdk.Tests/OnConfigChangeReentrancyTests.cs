@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Quonfig.Sdk;
+using Quonfig.Sdk.Tests.Telemetry.Helpers;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -194,5 +197,76 @@ public sealed class OnConfigChangeReentrancyTests
         handler.RefreshCompleted.Should().ContainSingle()
             .Which.Should().BeTrue("a refresh on another thread must not block on a handler fired by an SSE install");
         handler.Overlapped.Should().BeFalse("handlers are delivered serially");
+    }
+
+    /// <summary>
+    /// qfg-6vno.22: an <c>OnConfigChange</c> handler fired by an SSE install runs on the SSE reader
+    /// task. Before the fix, <c>CloseAsync</c> called from that handler waited (bounded, 5 s) on the
+    /// very task running it, so it always returned after the full timeout. It must return promptly,
+    /// the SSE loop must still end once the handler returns, and nothing may be logged at Error or
+    /// surface an <see cref="ObjectDisposedException"/> while the loop unwinds.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SsePath_HandlerCanCloseTheClientWithoutWaitingOnItself(bool asyncHandler)
+    {
+        using var server = WireMockServer.Start();
+        ServeConfigs(server, 42);
+        server
+            .Given(Request.Create().WithPath(SsePath).UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200)
+                .WithHeader("Content-Type", "text/event-stream")
+                .WithBody("data: " + EnvelopeJson(43) + "\n\n"));
+
+        var clientSet = new TaskCompletionSource<Quonfig>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var closed = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int calls = 0;
+        async Task CloseFromHandlerAsync()
+        {
+            var client = await clientSet.Task.ConfigureAwait(false);
+            var sw = Stopwatch.StartNew();
+            await client.CloseAsync().ConfigureAwait(false);
+            closed.TrySetResult(sw.ElapsedMilliseconds);
+        }
+        void Handle()
+        {
+            // Call 1 is the init fetch (gen 42); call 2 is the SSE install of gen 43.
+            if (Interlocked.Increment(ref calls) != 2) return;
+            // A throw here is caught and counted by the SDK; the on_config_update assertion sees it.
+            if (!clientSet.Task.Wait(HandlerWait)) throw new TimeoutException("client never attached");
+            if (asyncHandler)
+            {
+                // An async-void style handler: CloseAsync runs inline up to its first await.
+                _ = CloseFromHandlerAsync();
+            }
+            else
+            {
+                CloseFromHandlerAsync().GetAwaiter().GetResult();
+            }
+        }
+
+        var logger = new CaptureLogger();
+        var opts = Options(server, sse: true, Handle);
+        opts.Logger = logger;
+        var c = new Quonfig(opts);
+        await using var owned = c;
+        clientSet.SetResult(c);
+        await c.InitAsync();
+
+        await Within(closed.Task, TimeSpan.FromSeconds(15));
+        long elapsedMs = await closed.Task;
+        elapsedMs.Should().BeLessThan(1000, "CloseAsync from an SSE-path handler must not wait on the SSE task running it");
+
+        var sseTask = c.SseRunTask;
+        sseTask.Should().NotBeNull();
+        await Within(sseTask!, TimeSpan.FromSeconds(5));
+        sseTask!.IsCompleted.Should().BeTrue("the SSE loop ends once the handler returns");
+
+        c.CallbackErrorsTotal("on_config_update").Should().Be(0);
+        logger.LogCount(Microsoft.Extensions.Logging.LogLevel.Error).Should().Be(0,
+            string.Join("\n", logger.Lines.Select(l => l.Level + ": " + l.Message)));
+        logger.Exceptions.OfType<ObjectDisposedException>().Should().BeEmpty();
+        logger.LogCount(Microsoft.Extensions.Logging.LogLevel.Warning, "SSE envelope install failed|onEnvelope handler threw").Should().Be(0);
     }
 }
