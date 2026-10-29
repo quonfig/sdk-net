@@ -190,8 +190,9 @@ public static class ConfigRowParser
                     // string so loading never fails and the typed getter applies the malformed-value
                     // contract (default + warn once; Throw mode raises) when it is read.
                     var s = valueEl.ValueKind == JsonValueKind.String ? valueEl.GetString() ?? "" : valueEl.GetRawText();
-                    object payload = IsoDuration.TryParse(s, out var ts) ? ts : s;
-                    return new Value(ValueType.Duration, payload, confidential, decryptWith);
+                    return IsoDuration.TryParse(s, out var ts)
+                        ? Value.ParsedDuration(ts, s, confidential, decryptWith)
+                        : new Value(ValueType.Duration, s, confidential, decryptWith);
                 }
             case "json":
                 return new Value(ValueType.Json, ConvertJson(valueEl), confidential, decryptWith);

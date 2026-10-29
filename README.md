@@ -21,7 +21,7 @@ dotnet add package Quonfig.Sdk.Serilog
 Or via `<PackageReference>`:
 
 ```xml
-<PackageReference Include="Quonfig.Sdk" Version="2.0.0" />
+<PackageReference Include="Quonfig.Sdk" Version="2.1.0" />
 ```
 
 ## Packages
@@ -58,6 +58,29 @@ contract every Quonfig SDK follows.
   logs once per key.
 - **`Get*Details` never throw.** A wrong-type or malformed value reports `Reason = Error` and
   `ErrorCode = TypeMismatch`, with your default as the value.
+
+### Untyped details: `EvaluateDetails`
+
+`EvaluateDetails(key, contexts)` on the `IQuonfigDetailsReader` interface returns the resolved
+value as it is stored, with the same reason, variant and metadata as the `Get*Details` getters.
+It runs no type check and no parse, so it suits integrations that pass values through, such as an
+OpenFeature provider. A duration is its ISO 8601 text exactly as stored:
+
+```csharp
+// Quonfig and the bound view from WithContext implement IQuonfigDetailsReader.
+// Code that holds an IQuonfig reaches it with a type check:
+if (client is IQuonfigDetailsReader reader)
+{
+    var d = reader.EvaluateDetails("http.timeout");
+    // d.Value == "PT90S" (a string), d.Reason == Reason.Static, d.ValueType == "duration"
+}
+```
+
+An int is a `long`, a double a `double`, a string list an `IReadOnlyList<string>`, and JSON the
+same tree `GetJson` returns. A stored value a typed getter rejects (for example the duration
+`"30s"`) comes back as stored with a success reason. `EvaluateDetails` never throws: a missing key
+returns a `null` value with `Reason = Error` and `ErrorCode = FlagNotFound`, and an unset or
+malformed ENV_VAR or a decryption failure returns `null` with the error code a typed getter reports.
 
 ## Startup failure (`InitTimeout` / `OnInitFailure`)
 

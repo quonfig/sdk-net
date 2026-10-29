@@ -224,7 +224,10 @@ public sealed class Resolver
         }
 
         object coerced = Coerce(raw, configValueType, configKey, pv.Lookup);
-        return new Value(configValueType, coerced, candidate.Confidential, candidate.DecryptWith);
+        // Keep the ENV_VAR's ISO text for the untyped EvaluateDetails, as sdk-go does (qfg-177f).
+        return configValueType == ValueType.Duration && coerced is TimeSpan ts
+            ? Value.ParsedDuration(ts, raw, candidate.Confidential, candidate.DecryptWith)
+            : new Value(configValueType, coerced, candidate.Confidential, candidate.DecryptWith);
     }
 
     // ----- Weighted -----

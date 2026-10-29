@@ -43,7 +43,7 @@ namespace Quonfig.Sdk;
 [System.Diagnostics.CodeAnalysis.SuppressMessage(
     "Naming", "CA1724:Type names should not match namespaces",
     Justification = "Quonfig is the canonical client class under the Quonfig.Sdk namespace, mirroring the sdk-java type name (com.quonfig.sdk.Quonfig).")]
-public sealed class Quonfig : IQuonfig
+public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
 {
     /// <summary>
     /// Cross-SDK constant: when <see cref="ShouldLog"/> evaluates per-logger rules it injects the
@@ -623,6 +623,21 @@ public sealed class Quonfig : IQuonfig
     /// <inheritdoc/>
     public EvaluationDetails<TimeSpan?> GetDurationDetails(string key, ContextSet? contexts = null, TimeSpan? defaultValue = null) =>
         Evaluate(key, contexts, defaultValue, EvalValueType.Duration, CoerceDuration, raise: false);
+
+    /// <inheritdoc/>
+    public EvaluationDetails<object?> EvaluateDetails(string key, ContextSet? contexts = null)
+    {
+        // No expected type: TypedDetailsRaw skips IsCompatible and the coercer and returns the
+        // stored form (qfg-177f). raise: false, like every Get*Details getter, so it never throws.
+        var details = TypedDetailsRaw<object?>(key, contexts, null, expected: null, CoerceJson, out var resolveError);
+        details = Resolved<object?>(key, null, details, resolveError, raise: false);
+        // The stored value type is the config's declared valueType; null when the key is missing.
+        var cfg = _store?.Get(key);
+        return new EvaluationDetails<object?>(
+            details.Value, details.Reason, details.Variant, details.VariantIndex,
+            details.ErrorCode, details.ErrorMessage, details.Metadata,
+            cfg is null ? null : TryGetString(cfg, "valueType"));
+    }
 
     // ---------------- Internals ----------------
 
@@ -2093,7 +2108,7 @@ public sealed class Quonfig : IQuonfig
         string key,
         ContextSet? contexts,
         T fallback,
-        EvalValueType expected,
+        EvalValueType? expected,
         Func<object?, T> coerce,
         out QuonfigException? resolveError)
     {
@@ -2181,7 +2196,8 @@ public sealed class Quonfig : IQuonfig
                 MetadataFor(match, Reason.Default));
         }
 
-        if (!IsCompatible(match.Value, expected))
+        // expected is null only for the untyped EvaluateDetails, which skips the type check.
+        if (expected is { } want && !IsCompatible(match.Value, want))
         {
             // Typed-getter contract (qfg-zvyy): a value of another type is never coerced. The
             // public getters return the default (or null) and log once per key; with no default
@@ -2195,7 +2211,7 @@ public sealed class Quonfig : IQuonfig
         T typed;
         try
         {
-            typed = coerce(match.Value.Payload);
+            typed = expected is null ? (T)StoredForm(match.Value)! : coerce(match.Value.Payload);
         }
         catch (Exception ex) when (ex is InvalidCastException || ex is FormatException || ex is OverflowException)
         {
@@ -2230,7 +2246,9 @@ public sealed class Quonfig : IQuonfig
                     TryGetType(cfg) ?? string.Empty,
                     match.RuleIndex,
                     match.WeightedValueIndex,
-                    typed,
+                    // The untyped read reports the payload the typed getter would (a duration's
+                    // TimeSpan, not its text), so telemetry is identical (qfg-177f).
+                    expected is null ? match.Value.Payload : typed,
                     reportable,
                     matchReason));
             }
@@ -2245,7 +2263,7 @@ public sealed class Quonfig : IQuonfig
         // Hand the caller its own deep copy, with the same runtime types (Dictionary<string, object?>,
         // List<object?>, List<string>, string[]), so editing a result cannot change the config for
         // anyone else (qfg-goi1.2.15). Telemetry above keeps the stored value, which nobody mutates.
-        if (expected == EvalValueType.Json || expected == EvalValueType.StringList)
+        if (expected is null || expected == EvalValueType.Json || expected == EvalValueType.StringList)
         {
             typed = (T)CopyForCaller(typed)!;
         }
@@ -2553,6 +2571,12 @@ public sealed class Quonfig : IQuonfig
 
     private static object? CoerceJson(object? payload) => payload;
 
+    // Untyped EvaluateDetails (qfg-177f): the resolved value in its stored form, with no type
+    // check or parse. A parsed duration goes back to the ISO text it was read from; every other
+    // payload (including a malformed value kept as its raw text) is returned as is.
+    private static object? StoredForm(Value value) =>
+        value.DurationText is { } text ? text : value.Payload;
+
     // Deep copy of a stored JSON / string-list value for the caller (qfg-goi1.2.15). Scalars are
     // immutable and returned as is.
     private static object? CopyForCaller(object? value)
@@ -2619,9 +2643,11 @@ public sealed class Quonfig : IQuonfig
             ? v.GetString()
             : null;
 
-    private static string? TryGetType(ConfigResponse cfg) =>
+    private static string? TryGetType(ConfigResponse cfg) => TryGetString(cfg, "type");
+
+    private static string? TryGetString(ConfigResponse cfg, string property) =>
         cfg.Raw.ValueKind == JsonValueKind.Object
-        && cfg.Raw.TryGetProperty("type", out var v)
+        && cfg.Raw.TryGetProperty(property, out var v)
         && v.ValueKind == JsonValueKind.String
             ? v.GetString()
             : null;
