@@ -99,7 +99,13 @@ public sealed class Supervisor : IAsyncDisposable
         {
             // Capture for closure.
             var captured = spec;
-            _workerTasks.Add(Task.Run(() => RunWorkerAsync(captured)));
+            var task = Task.Run(() => RunWorkerAsync(captured));
+            // StopAsync snapshots the list under this lock; adding outside it could expose a
+            // half-added (null) slot to Task.WhenAll when Stop races Start (qfg-vyq7).
+            lock (_workerTasks)
+            {
+                _workerTasks.Add(task);
+            }
         }
     }
 

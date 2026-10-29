@@ -132,7 +132,7 @@ public sealed class MalformedValueContractTests : IDisposable
         var d = client.GetIntDetails(BadIntEnvKey);
         d.Value.Should().BeNull();
         d.Reason.Should().Be(Reason.Error);
-        d.ErrorCode.Should().Be(ErrorCode.TypeMismatch);
+        d.ErrorCode.Should().Be(ErrorCode.ParseError);
     }
 
     [Fact]

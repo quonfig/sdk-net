@@ -23,7 +23,8 @@ public interface IQuonfigDetailsReader
     /// the stored value type.
     /// Never throws: a missing key returns a null value with <see cref="Reason.Error"/> and
     /// <see cref="ErrorCode.FlagNotFound"/>, and an unresolvable value (unset or malformed
-    /// ENV_VAR, decryption failure) returns null with the same error code a typed getter reports.
+    /// ENV_VAR, decryption failure) returns null with the same error code a typed getter reports
+    /// (<see cref="ErrorCode.ParseError"/> for a malformed ENV_VAR value).
     /// </summary>
     /// <remarks>
     /// On a bound view, <paramref name="contexts"/> is layered on the bound context the same way

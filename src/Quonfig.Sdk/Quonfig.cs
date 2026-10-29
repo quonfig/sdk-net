@@ -2210,9 +2210,9 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
         catch (QuonfigException ex)
         {
             resolveError = ex;
-            // A malformed ENV_VAR value is a type mismatch, like a malformed stored value; an unset
-            // ENV_VAR or a decryption failure stays General. Matches sdk-go errorCodeFor (qfg-zvyy).
-            var code = ex is QuonfigCoercionException ? ErrorCode.TypeMismatch : ErrorCode.General;
+            // A malformed ENV_VAR value is a parse error, like a malformed stored value (qfg-wg1n);
+            // an unset ENV_VAR or a decryption failure stays General.
+            var code = ex is QuonfigCoercionException ? ErrorCode.ParseError : ErrorCode.General;
             return RowErrorDetails(cfg, fallback, code, ex.Message);
         }
 #pragma warning disable CA1031 // crash containment at the eval boundary
@@ -2263,11 +2263,16 @@ public sealed class Quonfig : IQuonfig, IQuonfigDetailsReader
             // A stored value that cannot be read as the requested type follows the same
             // malformed-value contract as an ENV_VAR one (qfg-2agi.12): Resolved() logs a warning
             // once per key; a plain typed getter raises under OnNoDefault.Throw when no
-            // defaultValue is supplied, a Get*Details getter reports Reason=Error. The message names the key only; the raw value may be sensitive.
+            // defaultValue is supplied, a Get*Details getter reports Reason=Error with
+            // ErrorCode.ParseError (qfg-wg1n). The one exception is GetInt on a well-formed int
+            // that does not fit in an int (CoerceInt's checked narrowing): the value parses, it is
+            // just out of range for the requested type, so it stays TypeMismatch, like a double
+            // beyond +/-(2^53-1) read as a long. The message names the key only; the raw value may be sensitive.
             resolveError = new QuonfigCoercionException(
                 FormattableString.Invariant($"config \"{key}\" cannot be read as {expected}: {ex.Message}"), ex);
+            var code = ex is OverflowException && typeof(T) == typeof(int?) ? ErrorCode.TypeMismatch : ErrorCode.ParseError;
             return RowErrorDetails(
-                cfg, fallback, ErrorCode.TypeMismatch,
+                cfg, fallback, code,
                 FormattableString.Invariant($"cannot return \"{key}\" as {expected}: {ex.Message}"));
         }
 
