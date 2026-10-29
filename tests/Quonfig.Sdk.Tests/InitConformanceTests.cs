@@ -48,7 +48,7 @@ public sealed class InitConformanceTests
     }
 
     private static int ConfigRequests(WireMockServer server) =>
-        server.LogEntries.Count(e => e.RequestMessage.Path == "/api/v2/configs");
+        server.LogEntries.Count(e => e.RequestMessage!.Path == "/api/v2/configs");
 
     private static QuonfigOptions Options(string[] apiUrls, OnInitFailure mode, TimeSpan initTimeout, CaptureLogger? logger = null) => new()
     {

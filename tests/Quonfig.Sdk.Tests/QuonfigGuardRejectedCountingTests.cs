@@ -68,7 +68,7 @@ public sealed class QuonfigGuardRejectedCountingTests
     }
 
     private static int SseRequestCount(WireMockServer server) =>
-        server.LogEntries.Count(e => e.RequestMessage.Path == SsePath);
+        server.LogEntries.Count(e => e.RequestMessage!.Path == SsePath);
 
     private static async Task WaitForSseReconnectAsync(WireMockServer server)
     {

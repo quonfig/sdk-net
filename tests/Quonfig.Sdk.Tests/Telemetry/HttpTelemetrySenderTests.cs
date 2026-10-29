@@ -50,7 +50,7 @@ public sealed class HttpTelemetrySenderTests
 
         var logs = server.LogEntries.ToList();
         logs.Should().HaveCount(1);
-        var req = logs[0].RequestMessage;
+        var req = logs[0].RequestMessage!;
         req.Method.Should().Be("POST");
         req.AbsolutePath.Should().Be("/api/v1/telemetry/");
         req.Headers!["Authorization"].ToString().Should().Be(ExpectedAuth());
@@ -68,7 +68,7 @@ public sealed class HttpTelemetrySenderTests
         using var sender = new HttpTelemetrySender(new Uri(server.Urls[0]), SdkKey);
         await sender.SendAsync(SamplePayload(), CancellationToken.None);
 
-        var body = server.LogEntries.Single().RequestMessage.Body;
+        var body = server.LogEntries.Single().RequestMessage!.Body;
         body.Should().NotBeNull();
         using var doc = JsonDocument.Parse(body!);
         doc.RootElement.GetProperty("instanceHash").GetString().Should().Be("abc-123");
@@ -115,6 +115,6 @@ public sealed class HttpTelemetrySenderTests
         using var sender = new HttpTelemetrySender(new Uri(server.Urls[0] + "/"), SdkKey);
         await sender.SendAsync(SamplePayload(), CancellationToken.None);
 
-        server.LogEntries.Single().RequestMessage.AbsolutePath.Should().Be("/api/v1/telemetry/");
+        server.LogEntries.Single().RequestMessage!.AbsolutePath.Should().Be("/api/v1/telemetry/");
     }
 }

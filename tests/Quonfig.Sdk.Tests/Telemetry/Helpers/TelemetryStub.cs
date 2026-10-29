@@ -127,7 +127,7 @@ internal sealed class TelemetryStub : IDisposable
         _server.Dispose();
     }
 
-    private async Task<ResponseMessage> HandleAsync(IRequestMessage req)
+    private async Task<IResponseMessage> HandleAsync(IRequestMessage req)
     {
         StubStep step;
         TaskCompletionSource<StubStep>? hold = null;

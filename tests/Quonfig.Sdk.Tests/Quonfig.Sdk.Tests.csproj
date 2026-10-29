@@ -24,7 +24,7 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="FluentAssertions" />
-    <PackageReference Include="WireMock.Net" />
+    <PackageReference Include="WireMock.Net.Minimal" />
   </ItemGroup>
 
   <!-- The .NET SDK adds this package implicitly for net48 only where the 4.8 targeting pack is not
@@ -33,6 +33,10 @@
        same everywhere; it is the same package and version the SDK adds (qfg-66ko.19). -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+    <!-- WireMock.Net.Minimal 2.x -> Scriban.Signed 7.x needs System.Text.Json >= 10.0.8 on
+         netstandard2.0, above the SDK's 8.0.6 central pin. Raised here only, for the net48 test
+         host; the published Quonfig.Sdk packages keep the 8.0.6 floor (qfg-66ko.19). -->
+    <PackageReference Include="System.Text.Json" VersionOverride="10.0.8" />
   </ItemGroup>
 
   <ItemGroup>
