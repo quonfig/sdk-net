@@ -46,6 +46,9 @@
     <!-- Xunit.SkippableFact — chaos tests must skip cleanly when QUONFIG_CHAOS_RUN!=1 so the
          default `dotnet test` reports skipped (not failed/passed). -->
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.85" />
+    <!-- net48 reference assemblies for the test project, pinned explicitly so the lock file is the
+         same on every OS (qfg-66ko.19). Build-time only, never a runtime dependency. -->
+    <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
   </ItemGroup>
 
 </Project>

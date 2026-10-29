@@ -27,6 +27,14 @@
     <PackageReference Include="WireMock.Net" />
   </ItemGroup>
 
+  <!-- The .NET SDK adds this package implicitly for net48 only where the 4.8 targeting pack is not
+       installed (Linux/macOS, not windows runners), which made packages.lock.json differ by OS and
+       locked-mode restore fail on windows (NU1004). Referencing it explicitly makes the graph the
+       same everywhere; it is the same package and version the SDK adds (qfg-66ko.19). -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\..\src\Quonfig.Sdk\Quonfig.Sdk.csproj" />
   </ItemGroup>
