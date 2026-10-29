@@ -172,7 +172,7 @@ public sealed class EnvVarFallbackTests : IDisposable
     {
         foreach (var entry in server.LogEntries)
         {
-            var headers = entry.RequestMessage.Headers;
+            var headers = entry.RequestMessage!.Headers;
             if (headers is null) continue;
             var authKey = headers.Keys.FirstOrDefault(
                 k => string.Equals(k, "Authorization", StringComparison.OrdinalIgnoreCase));

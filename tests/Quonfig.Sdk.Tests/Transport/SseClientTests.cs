@@ -330,15 +330,15 @@ public sealed class SseClientTests
         try { await runTask; } catch (OperationCanceledException) { }
 
         server.LogEntries.ToList().Should().NotBeEmpty("SSE client must have hit the server");
-        var log = server.LogEntries.First();
+        var log = server.LogEntries[0];
         string expectedAuth = "Basic " +
             Convert.ToBase64String(Encoding.UTF8.GetBytes("1:" + SdkKey));
-        log.RequestMessage.Headers!["Authorization"].ToString().Should().Be(expectedAuth);
-        log.RequestMessage.Headers!["X-Quonfig-SDK-Version"].ToString()
+        log.RequestMessage!.Headers!["Authorization"].ToString().Should().Be(expectedAuth);
+        log.RequestMessage!.Headers!["X-Quonfig-SDK-Version"].ToString()
             .Should().Be("dotnet/" + SdkInfoTests.AssemblyVersion());
-        log.RequestMessage.Headers!["Accept"].ToString().Should().Contain("text/event-stream");
+        log.RequestMessage!.Headers!["Accept"].ToString().Should().Contain("text/event-stream");
         // Path is /api/v2/sse/config — the constant the bead pins.
-        log.RequestMessage.Path.Should().Be("/api/v2/sse/config");
+        log.RequestMessage!.Path.Should().Be("/api/v2/sse/config");
     }
 
     [Fact]
@@ -461,14 +461,14 @@ public sealed class SseClientTests
         // (not give-up, not walk-away). The window is generous; with a 25-100ms backoff three
         // attempts land in well under a second.
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (primary.LogEntries.Count() < 3 && DateTime.UtcNow < deadline)
+        while (primary.LogEntries.Count < 3 && DateTime.UtcNow < deadline)
         {
             await Task.Delay(25);
         }
         cts.Cancel();
         try { await runTask; } catch (OperationCanceledException) { }
 
-        primary.LogEntries.Count().Should().BeGreaterThanOrEqualTo(3,
+        primary.LogEntries.Count.Should().BeGreaterThanOrEqualTo(3,
             "a dead primary stream must be retried forever with backoff");
         secondary.LogEntries.Should().BeEmpty(
             "SSE never fails over — the stream is pinned to StreamUrls[0] (f05)");

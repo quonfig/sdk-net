@@ -56,7 +56,7 @@ public sealed class HttpTransportTests
         envelope.Should().NotBeNull();
         var logs = server.LogEntries.ToList();
         logs.Should().HaveCount(1);
-        var headers = logs[0].RequestMessage.Headers!;
+        var headers = logs[0].RequestMessage!.Headers!;
         headers["Authorization"].ToString().Should().Be(ExpectedAuth());
         headers["X-Quonfig-SDK-Version"].ToString().Should().Be(ExpectedVersion());
     }

@@ -53,7 +53,7 @@ public sealed class QuonfigRefreshStampTests
     }
 
     private static int SseRequestCount(WireMockServer server) =>
-        server.LogEntries.Count(e => e.RequestMessage.Path == SsePath);
+        server.LogEntries.Count(e => e.RequestMessage!.Path == SsePath);
 
     [Fact]
     public async Task GuardRejectedSseEnvelope_DoesNotAdvanceLastSuccessfulRefresh()

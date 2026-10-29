@@ -39,13 +39,16 @@
     <!-- Do not bump to 8+: commercially licensed (Xceed). See .github/dependabot.yml. -->
     <PackageVersion Include="FluentAssertions" Version="7.2.2" />
     <PackageVersion Include="NSubstitute" Version="5.3.0" />
-    <PackageVersion Include="WireMock.Net" Version="1.6.7" />
+    <PackageVersion Include="WireMock.Net.Minimal" Version="2.21.0" />
     <!-- YamlDotNet — chaos scenarios live as YAML under ../integration-test-data/chaos/scenarios/.
          Used only from Quonfig.Sdk.Chaos.Tests; the SDK proper has no YAML dependency. -->
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <!-- Xunit.SkippableFact — chaos tests must skip cleanly when QUONFIG_CHAOS_RUN!=1 so the
          default `dotnet test` reports skipped (not failed/passed). -->
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.85" />
+    <!-- net48 reference assemblies for the test project, pinned explicitly so the lock file is the
+         same on every OS (qfg-66ko.19). Build-time only, never a runtime dependency. -->
+    <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
   </ItemGroup>
 
 </Project>
