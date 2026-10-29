@@ -48,6 +48,17 @@ public sealed class Value : IEquatable<Value>
     /// </summary>
     internal string? StoredReportableValue { get; private set; }
 
+    /// <summary>
+    /// The ISO 8601 text a parsed <see cref="ValueType.Duration"/> value was read from (the stored
+    /// string, or the ENV_VAR text that provided it). Null for every other value. Read by the
+    /// untyped <c>EvaluateDetails</c> so it returns the duration exactly as stored (qfg-177f).
+    /// Not part of equality.
+    /// </summary>
+    internal string? DurationText { get; private set; }
+
+    internal static Value ParsedDuration(TimeSpan parsed, string text, bool confidential, string? decryptWith) =>
+        new(ValueType.Duration, parsed, confidential, decryptWith) { DurationText = text };
+
     internal static Value Decrypted(string plaintext, Value stored) =>
         new(ValueType.String, plaintext, true, null)
         {

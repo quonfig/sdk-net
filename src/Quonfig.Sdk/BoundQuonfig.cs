@@ -102,4 +102,8 @@ public sealed class BoundQuonfig : IBoundQuonfig
     /// <inheritdoc/>
     public EvaluationDetails<TimeSpan?> GetDurationDetails(string key, TimeSpan? defaultValue = null) =>
         _client.GetDurationDetails(key, _bound, defaultValue);
+
+    /// <inheritdoc/>
+    public EvaluationDetails<object?> EvaluateDetails(string key) =>
+        _client.EvaluateDetails(key, _bound);
 }

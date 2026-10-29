@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.1.0 - 2026-10-29
+
+### Added
+
+- **`EvaluateDetails(string key, ContextSet? contexts = null)`** on `IQuonfig` / `Quonfig`, and
+  **`EvaluateDetails(string key)`** on `IBoundQuonfig` / `BoundQuonfig` (qfg-177f). An untyped
+  details read that matches sdk-go's `Client.EvaluateDetails`. It returns
+  `EvaluationDetails<object?>` with the resolved value in its stored form (after ENV_VAR
+  provisioning and decryption) and the same reason, variant, metadata and telemetry as the typed
+  `Get*Details` getters. A duration is its ISO 8601 text exactly as stored (`"PT90S"`, not a
+  rebuilt `TimeSpan`); an ENV_VAR-provided duration is the variable's text. It runs no type check,
+  coercion or parse validation, so a stored value a typed getter rejects (for example `"30s"`) is
+  returned as stored with a success reason. It never throws: a missing key returns a `null` value
+  with `ErrorCode.FlagNotFound`, and an unresolvable value returns `null` with the error code the
+  typed getters report. Existing getters are unchanged.
+- **`EvaluationDetails<T>.ValueType`** (`string?`) and a constructor overload that sets it. The
+  config's stored value type as its wire name (`"duration"`, `"string_list"`, ...), set by
+  `EvaluateDetails` whenever the key exists and null when it is not found, matching sdk-node's
+  `valueType`. The typed `Get*Details` getters leave it null.
+
+  Adding a member to `IQuonfig` and `IBoundQuonfig` means a class that implements either interface
+  itself (rather than using `Quonfig` or a mocking library) must add `EvaluateDetails` to compile
+  against 2.1.0. Default interface methods are not available on the `netstandard2.0` target.
+
 ## 2.0.0 - 2026-10-26
 
 The typed-getter contract (qfg-zvyy), shared by every Quonfig SDK and pinned by the

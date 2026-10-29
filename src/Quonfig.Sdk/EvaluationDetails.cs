@@ -51,7 +51,25 @@ public sealed class EvaluationDetails<T>
         ErrorCode? errorCode,
         string? errorMessage,
         IReadOnlyDictionary<string, object?>? metadata)
+        : this(value, reason, variant, variantIndex, errorCode, errorMessage, metadata, valueType: null)
     {
+    }
+
+    /// <summary>
+    /// Constructs a fully populated EvaluationDetails that also names the config's stored value
+    /// type (see <see cref="ValueType"/>).
+    /// </summary>
+    public EvaluationDetails(
+        T value,
+        Reason reason,
+        string variant,
+        int? variantIndex,
+        ErrorCode? errorCode,
+        string? errorMessage,
+        IReadOnlyDictionary<string, object?>? metadata,
+        string? valueType)
+    {
+        ValueType = valueType;
         Value = value;
         Reason = reason;
         Variant = variant ?? throw new System.ArgumentNullException(nameof(variant));
@@ -90,6 +108,15 @@ public sealed class EvaluationDetails<T>
 
     /// <summary>Optional human-readable error description; companion to <see cref="ErrorCode"/>.</summary>
     public string? ErrorMessage { get; }
+
+    /// <summary>
+    /// The config's stored value type as its wire name (<c>"duration"</c>, <c>"string_list"</c>,
+    /// <c>"int"</c>, ...), as declared in the config file. Set by the untyped
+    /// <see cref="IQuonfig.EvaluateDetails"/> whenever the key exists, including when the value
+    /// cannot be resolved; null when the key is not found. Null from the typed <c>Get*Details</c>
+    /// getters, whose type is the getter's (qfg-177f, matching sdk-node's <c>valueType</c>).
+    /// </summary>
+    public string? ValueType { get; }
 
     /// <summary>Immutable metadata bag. Never null; empty when no metadata is available.</summary>
     public IReadOnlyDictionary<string, object?> Metadata { get; }
