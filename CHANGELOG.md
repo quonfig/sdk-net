@@ -1,8 +1,34 @@
 # Changelog
 
-## [Unreleased]
+## 2.2.0 - 2026-10-29
+
+Edge-case behaviour change on the details API's error path (qfg-wg1n), plus two fixes. Only the
+`ErrorCode` on a failed read changes; values, reasons and exceptions do not.
+
+### Changed
+
+- **New `ErrorCode.ParseError`.** The typed `Get*Details` getters and `EvaluateDetails` now
+  report a value that has the right type but does not parse as `ParseError` (was
+  `TypeMismatch`): an ENV_VAR value that cannot be converted to the config's type (an int
+  variable `"abc"`, a duration `"30s"`, a bool `"maybe"`, invalid JSON) and, on the typed
+  getters, a malformed stored int, double or duration (`"twelve"`, `"30s"`). The reason
+  (`Reason.Error`), the value (your default; null on `EvaluateDetails`), the variant and the
+  metadata are unchanged. A config of another type (`GetStringDetails` on an int config,
+  `GetLongDetails` on `3.9`, `GetIntDetails` on an int beyond `int` range) is still
+  `TypeMismatch`, and an unset ENV_VAR or a decryption failure is still `General`.
+  `EvaluateDetails` still returns a malformed stored value as stored with its success reason.
+  The plain getters (`QuonfigCoercionException`, `QuonfigTypeMismatchException`) and
+  `IsFeatureEnabled` are unchanged. `ParseError` is appended after `General`, so the existing
+  members keep their numeric values. Code that compared `ErrorCode` to `TypeMismatch` to detect
+  a malformed value should also accept `ParseError`, and an exhaustive `switch` over `ErrorCode`
+  needs the new member. Quonfig.OpenFeature.ServerProvider 2.3.0 already maps `ParseError`
+  straight through to OpenFeature's `PARSE_ERROR`. Tests: `ParseErrorCodeTests`.
 
 ### Fixed
+
+- `CloseAsync()` during startup no longer risks `ArgumentException: The tasks argument included
+  a null value` (qfg-vyq7, seen on net48). The supervisor added worker tasks without the lock its
+  stop path snapshots under; it now takes that lock.
 
 - `CloseAsync()` called from an `OnConfigChange` handler fired by an SSE update now returns
   promptly instead of after a 5 s timeout (qfg-6vno.22). The handler runs on the SSE reader task,

@@ -21,7 +21,7 @@ dotnet add package Quonfig.Sdk.Serilog
 Or via `<PackageReference>`:
 
 ```xml
-<PackageReference Include="Quonfig.Sdk" Version="2.1.0" />
+<PackageReference Include="Quonfig.Sdk" Version="2.2.0" />
 ```
 
 ## Packages
@@ -56,8 +56,10 @@ contract every Quonfig SDK follows.
 - **`IsFeatureEnabled` never throws.** It is true only for a resolved bool `true`. A missing
   key, a flag with no matching rule, a non-bool value or a resolution error returns `false` and
   logs once per key.
-- **`Get*Details` never throw.** A wrong-type or malformed value reports `Reason = Error` and
-  `ErrorCode = TypeMismatch`, with your default as the value.
+- **`Get*Details` never throw.** A failed read reports `Reason = Error` with your default as the
+  value. A wrong-type value is `ErrorCode = TypeMismatch`; a value of the right type that does
+  not parse (a malformed ENV_VAR value, a malformed stored int, double or duration) is
+  `ErrorCode = ParseError`.
 
 ### Untyped details: `EvaluateDetails`
 

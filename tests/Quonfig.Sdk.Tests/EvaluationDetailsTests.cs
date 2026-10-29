@@ -49,7 +49,7 @@ public sealed class EvaluationDetailsTests
     public void ErrorCode_EnumHasExpectedSet()
     {
         System.Enum.GetNames(typeof(ErrorCode))
-            .Should().BeEquivalentTo("FlagNotFound", "TypeMismatch", "General");
+            .Should().BeEquivalentTo("FlagNotFound", "TypeMismatch", "General", "ParseError");
     }
 
     [Fact]
