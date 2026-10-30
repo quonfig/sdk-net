@@ -90,10 +90,29 @@ public sealed class InitConformanceTests
         using var leg1 = WireMockServer.Start();
         ServeStatus(leg0, 401);
         ServeStatus(leg1, 503);
-        await using var client = new Quonfig(Options(new[] { leg0.Urls[0], leg1.Urls[0] }, OnInitFailure.Fail, TimeSpan.FromMilliseconds(1500)));
+        // InitTimeout = 0 runs exactly one attempt to completion (D3), so the decision is made from both
+        // legs' real answers and never depends on where a wall-clock deadline happens to land (qfg-gfww).
+        await using var client = new Quonfig(Options(new[] { leg0.Urls[0], leg1.Urls[0] }, OnInitFailure.Fail, TimeSpan.Zero));
 
         var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
         raised.Reason.Should().Be(QuonfigInitFailureReason.Unavailable, "never decide unauthorized from the primary alone");
+        ConfigRequests(leg1).Should().BeGreaterThan(0, "the secondary is asked before deciding");
+    }
+
+    [Fact]
+    public async Task D1_Fail_PrimaryAuthButSecondary503_RetryLoopUntilDeadline_IsNotUnauthorized()
+    {
+        // The same decision through the positive-budget retry loop. Timeout vs Unavailable depends on
+        // whether the deadline cuts an attempt mid-flight (D2) - slow runners land either way - so only
+        // the D1 decision is asserted: a 401 primary plus a 503 secondary is never unauthorized.
+        using var leg0 = WireMockServer.Start();
+        using var leg1 = WireMockServer.Start();
+        ServeStatus(leg0, 401);
+        ServeStatus(leg1, 503);
+        await using var client = new Quonfig(Options(new[] { leg0.Urls[0], leg1.Urls[0] }, OnInitFailure.Fail, TimeSpan.FromMilliseconds(1500)));
+
+        var raised = await Assert.ThrowsAnyAsync<QuonfigInitException>(() => client.InitAsync());
+        raised.Reason.Should().NotBe(QuonfigInitFailureReason.Unauthorized, "never decide unauthorized from the primary alone");
     }
 
     [Fact]
