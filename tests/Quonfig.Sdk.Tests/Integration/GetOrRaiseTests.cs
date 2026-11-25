@@ -15,6 +15,22 @@ namespace Quonfig.Sdk.Tests.Integration;
 
 public sealed class GetOrRaiseTests
 {
+    private static string Qf1TestKeyset(params string[] labels)
+    {
+        var entries = new System.Collections.Generic.List<string>();
+        foreach (var label in labels)
+        {
+            var input = System.Text.Encoding.UTF8.GetBytes("qf1 test vector private key: " + label);
+#if NET8_0_OR_GREATER
+            var digest = System.Security.Cryptography.SHA256.HashData(input);
+#else
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var digest = sha256.ComputeHash(input);
+#endif
+            entries.Add("qf1-priv-" + Convert.ToBase64String(digest).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+        }
+        return string.Join(",", entries);
+    }
 
     [Fact(DisplayName = "get_or_raise can raise an error if value not found")]
     public async Task GetOrRaiseCanRaiseAnErrorIfValueNotFound()
@@ -386,6 +402,29 @@ public sealed class GetOrRaiseTests
         Assert.Throws<QuonfigEnvVarNotSetException>(() => client.GetString("provided.by.missing.env.var"));
     }
 
+    [Fact(DisplayName = "raises an error if a weighted variant is provided by a missing environment variable")]
+    public async Task RaisesAnErrorIfAWeightedVariantIsProvidedByAMissingEnvironmentVariable()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Throws<QuonfigEnvVarNotSetException>(() => client.GetString("weighted.variant.provided.missing", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } }));
+    }
+
+    [Fact(DisplayName = "get_or_raise on a weighted ENV_VAR variant returns the env var coerced to int")]
+    public async Task GetOrRaiseOnAWeightedEnvVarVariantReturnsTheEnvVarCoercedToInt()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetLong("weighted.variant.provided.int", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+        Assert.Equal(1234L, actual);
+    }
+
     [Fact(DisplayName = "raises an error if an env-var-provided config cannot be coerced to configured type")]
     public async Task RaisesAnErrorIfAnEnvVarProvidedConfigCannotBeCoercedToConfiguredType()
     {
@@ -427,15 +466,119 @@ public sealed class GetOrRaiseTests
         Assert.DoesNotContain("postgres://", raised.Message, StringComparison.Ordinal);
     }
 
-    [Fact(DisplayName = "raises an error for decryption failure")]
-    public async Task RaisesAnErrorForDecryptionFailure()
+    [Fact(DisplayName = "get_or_raise decrypts a qf1 secret")]
+    public async Task GetOrRaiseDecryptsAQf1Secret()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.short");
+        Assert.Equal("hello", actual);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret on a keyset the environment does not hold")]
+    public async Task RaisesUnableToDecryptForAQf1SecretOnAKeysetTheEnvironmentDoesNotHold()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.keyset.missing"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret whose fingerprint is not held")]
+    public async Task RaisesUnableToDecryptForAQf1SecretWhoseFingerprintIsNotHeld()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.key.not.held"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret held only under another keyset")]
+    public async Task RaisesUnableToDecryptForAQf1SecretHeldOnlyUnderAnotherKeyset()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.cross.keyset"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret with a tampered header")]
+    public async Task RaisesUnableToDecryptForAQf1SecretWithATamperedHeader()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.tampered.header"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret whose keyset name is invalid even when that env var holds its key")]
+    public async Task RaisesUnableToDecryptForAQf1SecretWhoseKeysetNameIsInvalidEvenWhenThatEnvVarHoldsItsKey()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.keyset.name.invalid"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret with a trailing colon")]
+    public async Task RaisesUnableToDecryptForAQf1SecretWithATrailingColon()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.trailing.colon"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a qf1 secret whose shared secret is all zero")]
+    public async Task RaisesUnableToDecryptForAQf1SecretWhoseSharedSecretIsAllZero()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var raised = Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.secret.low.order.ephemeral"));
+        Assert.DoesNotContain("qf1-priv-", raised.Message, StringComparison.Ordinal);
+    }
+
+    [Fact(DisplayName = "raises unable_to_decrypt for a value that still carries decryptWith")]
+    public async Task RaisesUnableToDecryptForAValueThatStillCarriesDecryptwith()
     {
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        Assert.Throws<QuonfigDecryptionException>(() => client.GetString("a.broken.secret.config"));
+        Assert.Throws<QuonfigDecryptionException>(() => client.GetString("qf1.legacy.decrypt.with"));
     }
 
     [Fact(DisplayName = "raises an error if an env-var-provided duration 30s cannot be coerced")]

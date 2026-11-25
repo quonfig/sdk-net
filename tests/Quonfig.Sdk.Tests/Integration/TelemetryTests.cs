@@ -13,6 +13,22 @@ namespace Quonfig.Sdk.Tests.Integration;
 
 public sealed class TelemetryTests
 {
+    private static string Qf1TestKeyset(params string[] labels)
+    {
+        var entries = new System.Collections.Generic.List<string>();
+        foreach (var label in labels)
+        {
+            var input = System.Text.Encoding.UTF8.GetBytes("qf1 test vector private key: " + label);
+#if NET8_0_OR_GREATER
+            var digest = System.Security.Cryptography.SHA256.HashData(input);
+#else
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var digest = sha256.ComputeHash(input);
+#endif
+            entries.Add("qf1-priv-" + Convert.ToBase64String(digest).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+        }
+        return string.Join(",", entries);
+    }
 
     [Fact(DisplayName = "reason is STATIC for config with no targeting rules")]
     public async Task ReasonIsStaticForConfigWithNoTargetingRules()
@@ -396,9 +412,10 @@ public sealed class TelemetryTests
         Assert.Equal(TestSetup.List(TestSetup.Map("key", "confidential.new.string", "type", "CONFIG", "value", "hello.world", "value_type", "string", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("string", "*****18aa7"), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
     }
 
-    [Fact(DisplayName = "confidential encrypted string is redacted using ciphertext hash")]
-    public async Task ConfidentialEncryptedStringIsRedactedUsingCiphertextHash()
+    [Fact(DisplayName = "qf1 secret is redacted using the ciphertext hash and reported as a secret")]
+    public async Task Qf1SecretIsRedactedUsingTheCiphertextHashAndReportedAsASecret()
     {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
         var telemetry = new TestSetup.TelemetryCapture();
         await using (var client = TestSetup.NewClient(new QuonfigOptions
         {
@@ -408,9 +425,9 @@ public sealed class TelemetryTests
         }))
         {
             var scoped = client.WithContext(new ContextSet());
-            telemetry.Evaluate(scoped, "a.secret.config");
+            telemetry.Evaluate(scoped, "qf1.secret.short");
         }
-        Assert.Equal(TestSetup.List(TestSetup.Map("key", "a.secret.config", "type", "CONFIG", "value", "hello.world", "value_type", "string", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("string", "*****936c9"), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "qf1.secret.short", "type", "SECRET", "value", "hello", "value_type", "string", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("string", "*****73985"), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
     }
 
     [Fact(DisplayName = "confidential weighted variant is redacted in selectedValue")]
@@ -476,5 +493,22 @@ public sealed class TelemetryTests
             telemetry.Evaluate(scoped, "provided.a.number");
         }
         Assert.Equal(TestSetup.List(TestSetup.Map("key", "provided.a.number", "type", "CONFIG", "value", 1234L, "value_type", "int", "count", 1L, "reason", 1L, "selected_value", TestSetup.Map("int", 1234L), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L))), telemetry.Sent("evaluation_summary"));
+    }
+
+    [Fact(DisplayName = "weighted ENV_VAR variant is reported as its resolved value with reason SPLIT")]
+    public async Task WeightedEnvVarVariantIsReportedAsItsResolvedValueWithReasonSplit()
+    {
+        var telemetry = new TestSetup.TelemetryCapture();
+        await using (var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            TelemetrySender = telemetry.Sender,
+        }))
+        {
+            var scoped = client.WithContext(new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+            telemetry.Evaluate(scoped, "weighted.variant.provided.int");
+        }
+        Assert.Equal(TestSetup.List(TestSetup.Map("key", "weighted.variant.provided.int", "type", "CONFIG", "value", 1234L, "value_type", "int", "count", 1L, "reason", 3L, "selected_value", TestSetup.Map("int", 1234L), "summary", TestSetup.Map("config_row_index", 0L, "conditional_value_index", 0L, "weighted_value_index", 0L))), telemetry.Sent("evaluation_summary"));
     }
 }

@@ -264,4 +264,67 @@ public sealed class GetWeightedValuesTests
             seen.SetEquals(new object?[] { 1L, 2L }),
             $"values seen over 200 evaluations: {string.Join(", ", seen)}");
     }
+
+    [Fact(DisplayName = "weighted json variant returns the json object")]
+    public async Task WeightedJsonVariantReturnsTheJsonObject()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetJson("weighted.variant.json", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+        Assert.Equal(TestSetup.Map("variant", "json", "n", 1L), actual);
+    }
+
+    [Fact(DisplayName = "weighted duration variant returns the duration")]
+    public async Task WeightedDurationVariantReturnsTheDuration()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        Assert.Equal(TimeSpan.FromTicks(90000L * TimeSpan.TicksPerMillisecond), client.GetDuration("weighted.variant.duration", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } }));
+        var details = client.GetDurationDetails("weighted.variant.duration", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+        Assert.Equal(TimeSpan.FromTicks(90000L * TimeSpan.TicksPerMillisecond), details.Value);
+        Assert.NotEqual(Reason.Error, details.Reason);
+    }
+
+    [Fact(DisplayName = "weighted ENV_VAR variant reads the env var coerced to int")]
+    public async Task WeightedEnvVarVariantReadsTheEnvVarCoercedToInt()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetLong("weighted.variant.provided.int", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+        Assert.Equal(1234L, actual);
+    }
+
+    [Fact(DisplayName = "weighted ENV_VAR variant with a missing env var returns the default")]
+    public async Task WeightedEnvVarVariantWithAMissingEnvVarReturnsTheDefault()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("weighted.variant.provided.missing", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } }, defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "weighted ENV_VAR variant with a missing env var and no default returns nil")]
+    public async Task WeightedEnvVarVariantWithAMissingEnvVarAndNoDefaultReturnsNil()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            OnNoDefault = OnNoDefault.Ignore,
+        });
+        var actual = client.GetString("weighted.variant.provided.missing", new ContextSet { ["user"] = new ContextProperties { ["tracking_id"] = "92a202f2" } });
+        Assert.Null(actual);
+    }
 }

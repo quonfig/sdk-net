@@ -11,6 +11,22 @@ namespace Quonfig.Sdk.Tests.Integration;
 
 public sealed class GetTests
 {
+    private static string Qf1TestKeyset(params string[] labels)
+    {
+        var entries = new System.Collections.Generic.List<string>();
+        foreach (var label in labels)
+        {
+            var input = System.Text.Encoding.UTF8.GetBytes("qf1 test vector private key: " + label);
+#if NET8_0_OR_GREATER
+            var digest = System.Security.Cryptography.SHA256.HashData(input);
+#else
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var digest = sha256.ComputeHash(input);
+#endif
+            entries.Add("qf1-priv-" + Convert.ToBase64String(digest).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+        }
+        return string.Join(",", entries);
+    }
 
     [Fact(DisplayName = "get returns a found value for key")]
     public async Task GetReturnsAFoundValueForKey()
@@ -88,13 +104,14 @@ public sealed class GetTests
     [Fact(DisplayName = "can return a value provided by an environment variable")]
     public async Task CanReturnAValueProvidedByAnEnvironmentVariable()
     {
+        using var env = TestSetup.Env("GREETING", "hello from the environment");
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        var actual = client.GetString("prefab.secrets.encryption.key");
-        Assert.Equal("c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221", actual);
+        var actual = client.GetString("greeting.from.env");
+        Assert.Equal("hello from the environment", actual);
     }
 
     [Fact(DisplayName = "can return a value provided by an environment variable after type coercion")]
@@ -109,28 +126,251 @@ public sealed class GetTests
         Assert.Equal(1234L, actual);
     }
 
-    [Fact(DisplayName = "can decrypt and return a secret value (with decryption key in in env var)")]
-    public async Task CanDecryptAndReturnASecretValueWithDecryptionKeyInInEnvVar()
+    [Fact(DisplayName = "decrypts a qf1 secret")]
+    public async Task DecryptsAQf1Secret()
     {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        var actual = client.GetString("a.secret.config");
-        Assert.Equal("hello.world", actual);
+        var actual = client.GetString("qf1.secret.short");
+        Assert.Equal("hello", actual);
     }
 
-    [Fact(DisplayName = "decrypts a secret whose key config has an environment rule")]
-    public async Task DecryptsASecretWhoseKeyConfigHasAnEnvironmentRule()
+    [Fact(DisplayName = "decrypts a qf1 secret whose value is the empty string")]
+    public async Task DecryptsAQf1SecretWhoseValueIsTheEmptyString()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.empty");
+        Assert.Equal("", actual);
+    }
+
+    [Fact(DisplayName = "decrypts a qf1 secret with multi-byte UTF-8")]
+    public async Task DecryptsAQf1SecretWithMultiByteUtf8()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.multibyte");
+        Assert.Equal("pässwörd 日本語 \ud83d\udd11", actual);
+    }
+
+    [Fact(DisplayName = "decrypts a qf1 secret and keeps its leading U+FEFF")]
+    public async Task DecryptsAQf1SecretAndKeepsItsLeadingUFeff()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.leading.bom");
+        Assert.Equal("\ufeffbom stays", actual);
+    }
+
+    [Fact(DisplayName = "decrypts a qf1 secret with quotes, backslash, newline, tab and colons")]
+    public async Task DecryptsAQf1SecretWithQuotesBackslashNewlineTabAndColons()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.json.special");
+        Assert.Equal("a\"b\\c\nd\te:f,g qf1:x", actual);
+    }
+
+    [Fact(DisplayName = "decrypts a qf1 secret on the bare QUONFIG_KEYSET keyset")]
+    public async Task DecryptsAQf1SecretOnTheBareQuonfigKeysetKeyset()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.default.keyset");
+        Assert.Equal("sk_test_default_keyset_value", actual);
+    }
+
+    [Fact(DisplayName = "decrypts a qf1 secret encrypted to the second key of a two-key keyset")]
+    public async Task DecryptsAQf1SecretEncryptedToTheSecondKeyOfATwoKeyKeyset()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.older.key");
+        Assert.Equal("written before rotation", actual);
+    }
+
+    [Fact(DisplayName = "decrypts the environment-scoped value of a qf1 secret on a second keyset")]
+    public async Task DecryptsTheEnvironmentScopedValueOfAQf1SecretOnASecondKeyset()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.env.scoped");
+        Assert.Equal("written with the first public key", actual);
+    }
+
+    [Fact(DisplayName = "a qf1 secret shadows a document with the same key in configs")]
+    public async Task AQf1SecretShadowsADocumentWithTheSameKeyInConfigs()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.shadowed");
+        Assert.Equal("hello", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret on a keyset the environment does not hold returns the default")]
+    public async Task Qf1SecretOnAKeysetTheEnvironmentDoesNotHoldReturnsTheDefault()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.keyset.missing", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret on a keyset the environment does not hold with no default returns nil")]
+    public async Task Qf1SecretOnAKeysetTheEnvironmentDoesNotHoldWithNoDefaultReturnsNil()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            OnNoDefault = OnNoDefault.Ignore,
+        });
+        var actual = client.GetString("qf1.secret.keyset.missing");
+        Assert.Null(actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret whose fingerprint is not held returns the default")]
+    public async Task Qf1SecretWhoseFingerprintIsNotHeldReturnsTheDefault()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.key.not.held", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret is looked up by keyset and fingerprint, never in another keyset")]
+    public async Task Qf1SecretIsLookedUpByKeysetAndFingerprintNeverInAnotherKeyset()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.cross.keyset", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret with a tampered header returns the default")]
+    public async Task Qf1SecretWithATamperedHeaderReturnsTheDefault()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.tampered.header", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret whose keyset name is invalid is refused even when that env var holds its key")]
+    public async Task Qf1SecretWhoseKeysetNameIsInvalidIsRefusedEvenWhenThatEnvVarHoldsItsKey()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.keyset.name.invalid", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret with a trailing colon is refused")]
+    public async Task Qf1SecretWithATrailingColonIsRefused()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.trailing.colon", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "qf1 secret whose ephemeral key gives an all-zero shared secret is refused")]
+    public async Task Qf1SecretWhoseEphemeralKeyGivesAnAllZeroSharedSecretIsRefused()
+    {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+        });
+        var actual = client.GetString("qf1.secret.low.order.ephemeral", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "a value that still carries decryptWith returns the default")]
+    public async Task AValueThatStillCarriesDecryptwithReturnsTheDefault()
     {
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        var actual = client.GetString("env.scoped.secret");
-        Assert.Equal("hello.world", actual);
+        var actual = client.GetString("qf1.legacy.decrypt.with", defaultValue: "DEFAULT");
+        Assert.Equal("DEFAULT", actual);
+    }
+
+    [Fact(DisplayName = "a value that still carries decryptWith with no default returns nil")]
+    public async Task AValueThatStillCarriesDecryptwithWithNoDefaultReturnsNil()
+    {
+        await using var client = TestSetup.NewClient(new QuonfigOptions
+        {
+            Datadir = TestSetup.DATADIR,
+            Environment = TestSetup.ENV_ID,
+            OnNoDefault = OnNoDefault.Ignore,
+        });
+        var actual = client.GetString("qf1.legacy.decrypt.with");
+        Assert.Null(actual);
     }
 
     [Fact(DisplayName = "duration 200 ms")]
@@ -2143,25 +2383,27 @@ public sealed class GetTests
     [Fact(DisplayName = "STRING getter on a decryption failure returns the default")]
     public async Task StringGetterOnADecryptionFailureReturnsTheDefault()
     {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        var actual = client.GetString("a.broken.secret.config", defaultValue: "DEFAULT");
+        var actual = client.GetString("qf1.secret.key.not.held", defaultValue: "DEFAULT");
         Assert.Equal("DEFAULT", actual);
     }
 
     [Fact(DisplayName = "STRING getter on a decryption failure with no default returns nil")]
     public async Task StringGetterOnADecryptionFailureWithNoDefaultReturnsNil()
     {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
             OnNoDefault = OnNoDefault.Ignore,
         });
-        var actual = client.GetString("a.broken.secret.config");
+        var actual = client.GetString("qf1.secret.key.not.held");
         Assert.Null(actual);
     }
 

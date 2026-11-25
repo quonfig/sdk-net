@@ -44,7 +44,7 @@ jobs:
         with:
           repository: quonfig/integration-test-data
           path: integration-test-data
-          ref: v2026.10.23
+          ref: 2e5b948b09f38922824a96bce94b746a8ce3e655  # qfg-8seuf.13: ITD main with the qf1 cases; move to the tag that includes it before merge
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73  # v4
