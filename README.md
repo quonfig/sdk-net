@@ -51,7 +51,7 @@ contract every Quonfig SDK follows.
 - **Hard failure on request.** With no `defaultValue` and `OnNoDefault = OnNoDefault.Throw` (the
   default), a failed read throws: `QuonfigTypeMismatchException`, `QuonfigCoercionException`,
   `QuonfigEnvVarNotSetException` or `QuonfigDecryptionException`. Use this form for values your
-  app cannot run without, such as secrets: a wrong decryption key then fails loudly instead of
+  app cannot run without, such as secrets: a missing or wrong key then fails loudly instead of
   serving defaults.
 - **`IsFeatureEnabled` never throws.** It is true only for a resolved bool `true`. A missing
   key, a flag with no matching rule, a non-bool value or a resolution error returns `false` and
@@ -83,6 +83,31 @@ same tree `GetJson` returns. A stored value a typed getter rejects (for example 
 `"30s"`) comes back as stored with a success reason. `EvaluateDetails` never throws: a missing key
 returns a `null` value with `Reason = Error` and `ErrorCode = FlagNotFound`, and an unset or
 malformed ENV_VAR or a decryption failure returns `null` with the error code a typed getter reports.
+
+## Secrets (qf1)
+
+A secret is a document in the workspace's `secrets/` directory. Each value is an encrypted `qf1:`
+string (X25519 + HKDF-SHA256 + AES-256-GCM) addressed to one public key of a named keyset. You
+read it with `GetString` like any other config; the SDK decrypts it on each read.
+
+- **Keys come from env vars named by the keyset.** A value encrypted to keyset
+  `QUONFIG_KEYSET_PROD` is opened with the private key entries in the env var
+  `QUONFIG_KEYSET_PROD` (a comma-separated list of `qf1-priv-...` entries; spaces, tabs and
+  newlines around entries are ignored). Names must match `QUONFIG_KEYSET` or
+  `QUONFIG_KEYSET_<A-Z0-9>...`; the SDK never reads any other variable for a secret. The SDK
+  reads env vars through `QuonfigOptions.EnvLookup` when you set it.
+- **A missing or wrong key fails that read only.** Startup, config updates and every other key
+  are unaffected. The read behaves like any other failed read: your `defaultValue`, or
+  `QuonfigDecryptionException` with no default under `OnNoDefault.Throw`. The message is
+  `config "<key>": qf1 <class>: ...` (for example `keyset_missing`, `key_not_held`) and names
+  keysets and key fingerprints only, never key material or the value.
+- **Secrets are strings.** A non-string getter (`GetInt`, `GetBool`, ...) on a secret is a type
+  mismatch and never shows the value.
+- **Telemetry** reports a secret evaluation with type `secret` and the value redacted
+  (`*****` + a hash of the stored ciphertext); the plaintext is never sent or logged.
+- **The old `decryptWith` format is no longer read.** A value that still carries `decryptWith`
+  fails with `QuonfigDecryptionException` instead of being decrypted. In datadir mode `secrets/`
+  is read last, so a secret shadows an old `configs/` copy with the same key.
 
 ## Startup failure (`InitTimeout` / `OnInitFailure`)
 
@@ -207,6 +232,10 @@ counting at the cap), a 100,000-entry example-context rate-limit map, and the 2M
 
 `netstandard2.0` is a contract, not a runtime, so the test project targets `net8.0;net48`; the
 appropriate host is chosen per cell in `.github/workflows/test.yaml`.
+
+`Quonfig.Sdk` depends on `BouncyCastle.Cryptography` on both targets: X25519 for secrets is not in
+the .NET base class library. On `netstandard2.0` it also provides AES-GCM; `net8.0` uses the BCL's
+`AesGcm`.
 
 ## Layout
 

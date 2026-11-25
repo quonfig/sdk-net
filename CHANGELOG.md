@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+qf1 secrets (qfg-8seuf.13, spec `project/plans/secrets-qf1-spec.md`). Not released; the version
+number is still to be decided.
+
+### Added
+
+- **Reads qf1 secrets.** Datadir mode loads the workspace's `secrets/` directory, LAST (after
+  `configs/`, `feature-flags/`, `segments/` and `log-levels/`), so a secret shadows a document
+  with the same key in `configs/`; a document from `secrets/` is a secret because of its
+  directory. Over the wire, an entry with `type: "secret"` is a secret (it used to be
+  `ConfigType.Unknown`). A secret's value is a `qf1:` string decrypted on each read with the
+  private keys in the env var the value names: `QUONFIG_KEYSET` or `QUONFIG_KEYSET_<NAME>`
+  (comma-separated `qf1-priv-...` entries), read through `QuonfigOptions.EnvLookup` when set.
+- **New `ConfigType.Secret`.** Appended after `Unknown`, so the existing members keep their
+  numeric values. An exhaustive `switch` over `ConfigType` needs the new member.
+- A missing, empty or invalid keyset, or a key this runtime does not hold, fails only the reads
+  of the values that need it, with `QuonfigDecryptionException` (or your default), never startup.
+  The message is `config "<key>": qf1 <class>: ...` and names keysets and fingerprints, never key
+  material, the ciphertext payload or the plaintext. Secrets are strings: other typed getters
+  report a type mismatch without echoing the value.
+- Telemetry reports a secret evaluation with type `secret`, its value redacted (`*****` plus 5
+  hex characters of MD5 over the stored ciphertext), even if the stored value lacks
+  `confidential: true`.
+
+### Changed
+
+- **The `decryptWith` format is no longer read.** A value that still carries `decryptWith` fails
+  with `QuonfigDecryptionException` (message mentions `decryptWith`) instead of being decrypted;
+  it is never returned as a value. The key-config lookup and its cycle guard are removed.
+  Workspaces move their secrets to `secrets/` (qf1) with the CLI.
+- **Dependency: `BouncyCastle.Cryptography` 2.7.0 is now referenced on every target framework**
+  (`net8.0` as well as `netstandard2.0`, where it already provided AES-GCM): X25519 is not in the
+  .NET base class library. Same package and version as before; `net8.0` keeps the BCL `AesGcm`.
+
+### Deprecated
+
+- `Quonfig.Sdk.Crypto.AesGcmCompat` (the old-format decryption helper) and
+  `Resolver.KeyResolver` are `[Obsolete]` (a warning, not an error). The SDK no longer calls
+  them; `Resolver`'s `keyResolver` constructor argument is ignored. Removal needs a major
+  version.
+
 ## 2.2.0 - 2026-10-29
 
 Edge-case behaviour change on the details API's error path (qfg-wg1n), plus two fixes. Only the
