@@ -2,14 +2,6 @@ using System;
 using System.Text;
 using Quonfig.Sdk.Exceptions;
 
-#if NET8_0_OR_GREATER
-using System.Security.Cryptography;
-#else
-using Org.BouncyCastle.Crypto.Engines;
-using Org.BouncyCastle.Crypto.Modes;
-using Org.BouncyCastle.Crypto.Parameters;
-#endif
-
 namespace Quonfig.Sdk.Crypto;
 
 /// <summary>
@@ -95,36 +87,14 @@ public static class AesGcmCompat
         }
     }
 
-#if NET8_0_OR_GREATER
     private static byte[] DecryptCore(byte[] key, byte[] iv, byte[] data, byte[] tag)
     {
-        var plaintext = new byte[data.Length];
-        using var aes = new AesGcm(key, GcmTagBytes);
-        aes.Decrypt(iv, data, tag, plaintext);
+        if (!Aes256Gcm.TryOpen(key, iv, Array.Empty<byte>(), data, tag, out var plaintext))
+        {
+            throw new QuonfigDecryptionException("AES-GCM authentication failed");
+        }
         return plaintext;
     }
-#else
-    private static byte[] DecryptCore(byte[] key, byte[] iv, byte[] data, byte[] tag)
-    {
-        // BouncyCastle expects the auth tag appended to the ciphertext rather than passed
-        // separately, mirroring the JCE "AES/GCM/NoPadding" convention sdk-java relies on.
-        var cipher = new GcmBlockCipher(new AesEngine());
-        cipher.Init(forEncryption: false, new AeadParameters(new KeyParameter(key), GcmTagBits, iv));
-
-        byte[] input = new byte[data.Length + tag.Length];
-        Buffer.BlockCopy(data, 0, input, 0, data.Length);
-        Buffer.BlockCopy(tag, 0, input, data.Length, tag.Length);
-
-        byte[] output = new byte[cipher.GetOutputSize(input.Length)];
-        int len = cipher.ProcessBytes(input, 0, input.Length, output, 0);
-        len += cipher.DoFinal(output, len);
-
-        if (len == output.Length) return output;
-        var trimmed = new byte[len];
-        Buffer.BlockCopy(output, 0, trimmed, 0, len);
-        return trimmed;
-    }
-#endif
 
     private static byte[] HexDecode(string hex)
     {
