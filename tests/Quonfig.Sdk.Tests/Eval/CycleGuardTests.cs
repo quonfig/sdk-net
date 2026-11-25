@@ -14,7 +14,9 @@ namespace Quonfig.Sdk.Tests.Eval;
 /// NOT_IN_SEG, or a decryptWith chain that loops, used to recurse until a
 /// <see cref="StackOverflowException"/> — uncatchable in .NET, so it killed the host process.
 /// Semantics match sdk-go (qfg-9dxb.4): a segment cycle is treated as a MISSING segment
-/// (IN_SEG false, NOT_IN_SEG true); a decryptWith cycle is a decryption failure.
+/// (IN_SEG false, NOT_IN_SEG true); a decryptWith cycle is a decryption failure. Since qf1
+/// (qfg-8seuf.13) decryptWith is no longer followed at all, so the cycle cases fail at the first
+/// value, still with a decryption failure and still without recursing.
 /// </summary>
 public sealed class CycleGuardTests
 {

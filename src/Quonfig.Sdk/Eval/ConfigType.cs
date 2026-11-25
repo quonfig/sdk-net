@@ -18,4 +18,10 @@ public enum ConfigType
     Schema,
     /// <summary>Anything we don't recognize — the evaluator treats unknowns the same as Config.</summary>
     Unknown,
+    /// <summary>
+    /// A qf1 secret: a document from the workspace's <c>secrets/</c> directory (<c>type: "secret"</c>
+    /// on the wire). Its values are qf1 strings, decrypted on read with the <c>QUONFIG_KEYSET*</c>
+    /// env var they name.
+    /// </summary>
+    Secret,
 }

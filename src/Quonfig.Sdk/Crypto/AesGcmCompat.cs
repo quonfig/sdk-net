@@ -17,7 +17,12 @@ namespace Quonfig.Sdk.Crypto;
 /// crypto exceptions. The <c>net8.0</c> and <c>netstandard2.0</c> branches must agree on the wire
 /// format byte-for-byte — see <c>tests/Crypto/AesGcmCompatTests.cs</c> for the cross-SDK fixture
 /// originally encrypted by sdk-java.</para>
+///
+/// <para>Deprecated: the SDK no longer reads the <c>decryptWith</c> format (a value carrying it
+/// fails to resolve); secrets are qf1 values in the workspace's <c>secrets/</c> directory. This
+/// helper is kept, unused by the SDK, so code calling it keeps compiling.</para>
 /// </summary>
+[Obsolete("The decryptWith secret format is no longer read by the SDK; secrets are qf1 values in secrets/. AesGcmCompat will be removed in a future major version.")]
 public static class AesGcmCompat
 {
     private const int GcmTagBits = 128;

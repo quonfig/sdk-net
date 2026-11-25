@@ -64,6 +64,25 @@ public sealed class DatadirLoaderTests : IDisposable
     }
 
     [Fact]
+    public void Load_ReadsSecretsLast_AndStampsTypeSecret()
+    {
+        // qf1 spec 13.7: secrets/ is loaded after the other four, so its document is the last write
+        // for a shared key; the directory, not the file's "type", makes it a secret.
+        WriteManifest("production");
+        WriteFile("secrets", "a.json", Config("a"));
+        WriteFile("configs", "a.json", Config("a"));
+        WriteFile("log-levels", "b.json", Config("b"));
+
+        var env = DatadirLoader.Load(_root, "production");
+
+        var rows = env.Configs
+            .Select(c => (Key: c.GetProperty("key").GetString(), Type: c.GetProperty("type").GetString()))
+            .ToList();
+        rows.Should().Equal(("a", "config"), ("b", "config"), ("a", "secret"));
+        env.Configs[2].GetProperty("default").GetProperty("value").GetString().Should().Be("v");
+    }
+
+    [Fact]
     public void Load_ExcludesSchemasDir_PerQfgB5yi()
     {
         // schemas/ holds JSON Schema documents, not config envelopes. Loading them produces empty-key

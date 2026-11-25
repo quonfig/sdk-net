@@ -32,26 +32,24 @@ public sealed class Evaluator
     /// Initializes a new evaluator. <paramref name="store"/> is required for
     /// <c>IN_SEG</c>/<c>NOT_IN_SEG</c> recursion and for decryption-key lookup; if null, those
     /// operators behave as "segment not found" (sdk-java/sdk-go fall-back semantics).
-    /// If <paramref name="resolver"/> is null, a default <see cref="Resolver"/> is wired up
-    /// whose <see cref="Resolver.KeyResolver"/> recursively evaluates the decrypt-key config
-    /// through this same evaluator.
+    /// If <paramref name="resolver"/> is null, a default <see cref="Resolver"/> is wired up that
+    /// reads env vars (ENV_VAR values, qf1 keysets) from the process environment.
     /// </summary>
     public Evaluator(ConfigStore? store, Resolver? resolver = null)
     {
         _store = store;
-        _resolver = resolver ?? new Resolver(null, ResolveKey);
+        _resolver = resolver ?? new Resolver();
     }
 
     /// <summary>
     /// Convenience overload: builds a default <see cref="Resolver"/> with the supplied
-    /// <paramref name="envLookup"/> while keeping the recursive decrypt-key resolution that the
-    /// parameterless constructor wires up. Used by <see cref="Quonfig"/> when a caller overrides
-    /// the env-var lookup (testability) without losing decryption support.
+    /// <paramref name="envLookup"/>, which then serves ENV_VAR values and qf1 keysets. Used by
+    /// <see cref="Quonfig"/> when a caller overrides the env-var lookup (testability).
     /// </summary>
     public Evaluator(ConfigStore? store, Resolver.EnvLookup envLookup)
     {
         _store = store;
-        _resolver = new Resolver(envLookup, ResolveKey);
+        _resolver = new Resolver(envLookup);
     }
 
     /// <summary>
@@ -104,12 +102,12 @@ public sealed class Evaluator
             var rule = rules[i];
             if (!AllCriteriaMatch(row.Key, rule.Criteria, contexts, segPath)) continue;
 
-            // Resolver expands PROVIDED, weighted-buckets, decryption, env-var coercion.
+            // Resolver expands PROVIDED, weighted-buckets, qf1 decryption, env-var coercion.
             // It throws on env-var-missing / decryption failure — let it propagate so the
             // caller can surface the right error code. weightedIndex is >= 0 only when a
             // weighted-values bucket was chosen.
             var resolved = _resolver.Resolve(
-                rule.Value, row.Key, row.ValueType, contexts, environmentId, out int weightedIndex, out string? missingHashProperty);
+                rule.Value, row.Key, row.ValueType, contexts, row.Type, out int weightedIndex, out string? missingHashProperty);
 
             // Canonical reason (mirrors sdk-go runtime_eval.go hasTargetingRules + integration-test-data
             // telemetry.yaml): SPLIT when a weighted bucket was resolved; otherwise STATIC only when
@@ -209,43 +207,6 @@ public sealed class Evaluator
         var result = Operators.EvaluateCriterion(rawValue, lookup.Exists, criterion, segResolver, out var regexTimedOut);
         if (regexTimedOut) OnRegexTimeout?.Invoke(currentKey, criterion.PropertyName ?? "");
         return result;
-    }
-
-    // The key config is evaluated in the same environment as the config being decrypted, so an
-    // environment-scoped key rule applies (sdk-go runtime_resolver.go; qfg-goi1.2.14).
-    private Value? ResolveKey(string configKey, ContextSet contexts, string? environmentId)
-    {
-        if (_store is null) return null;
-        var keyConfig = _store.Get(configKey);
-        if (keyConfig is null) return null;
-        // Get the unresolved candidate value from the matching rule; the outer Resolver call
-        // will recurse to handle PROVIDED on the key config itself.
-        var row = GetOrParse(keyConfig);
-        var match = EvaluateMatchedRuleRaw(row, contexts, environmentId);
-        return match;
-    }
-
-    private Value? EvaluateMatchedRuleRaw(ConfigRow row, ContextSet contexts, string? environmentId)
-    {
-        if (!string.IsNullOrEmpty(environmentId))
-        {
-            var env = row.FindEnvironment(environmentId);
-            if (env is not null)
-            {
-                var rawEnv = FindFirstMatchingRawValue(row, env.Rules, contexts);
-                if (rawEnv is not null) return rawEnv;
-            }
-        }
-        return FindFirstMatchingRawValue(row, row.DefaultRules, contexts);
-    }
-
-    private Value? FindFirstMatchingRawValue(ConfigRow row, IReadOnlyList<Rule> rules, ContextSet contexts)
-    {
-        foreach (var rule in rules)
-        {
-            if (AllCriteriaMatch(row.Key, rule.Criteria, contexts, null)) return rule.Value;
-        }
-        return null;
     }
 
     private static string[] Append(string[]? path, string key)
