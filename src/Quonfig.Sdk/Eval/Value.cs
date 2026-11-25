@@ -6,8 +6,8 @@ namespace Quonfig.Sdk.Eval;
 /// Universal value wrapper used by the evaluator and the <see cref="Resolver"/>. Mirrors sdk-java's
 /// <c>com.quonfig.sdk.eval.Value</c>: a discriminated union over <see cref="ValueType"/> plus two
 /// orthogonal flags — <see cref="Confidential"/> (the value is a secret and should be redacted in
-/// telemetry) and <see cref="DecryptWith"/> (the payload is AES-GCM ciphertext that needs the
-/// referenced key config to decrypt).
+/// telemetry) and <see cref="DecryptWith"/> (the old secret format's key-config pointer; no longer
+/// read: a value carrying it fails to resolve).
 ///
 /// <para>The runtime CLR type of <see cref="Payload"/> depends on <see cref="Type"/> — see the
 /// per-enum-value docs on <see cref="ValueType"/>.</para>
@@ -24,8 +24,10 @@ public sealed class Value : IEquatable<Value>
     public bool Confidential { get; }
 
     /// <summary>
-    /// Name of the config that holds the AES-GCM key. Non-null/empty means the <see cref="Payload"/>
-    /// is ciphertext and the resolver must look up this config to get the decryption key.
+    /// The old secret format's pointer to the config holding its AES-GCM key. This SDK no longer
+    /// decrypts that format: a value with a non-empty <see cref="DecryptWith"/> fails to resolve
+    /// with <see cref="Exceptions.QuonfigDecryptionException"/>. Secrets are qf1 values in
+    /// <c>secrets/</c>.
     /// </summary>
     public string? DecryptWith { get; }
 
@@ -59,10 +61,12 @@ public sealed class Value : IEquatable<Value>
     internal static Value ParsedDuration(TimeSpan parsed, string text, bool confidential, string? decryptWith) =>
         new(ValueType.Duration, parsed, confidential, decryptWith) { DurationText = text };
 
+    // A decrypted qf1 secret: confidential, and its telemetry marker is computed over the stored
+    // ciphertext string (spec 13.5), whatever the stored value's own confidential flag says.
     internal static Value Decrypted(string plaintext, Value stored) =>
         new(ValueType.String, plaintext, true, null)
         {
-            StoredReportableValue = Resolver.ReportableValueFor(stored),
+            StoredReportableValue = Resolver.RedactedMarker(stored.Payload as string ?? ""),
         };
 
     /// <inheritdoc/>

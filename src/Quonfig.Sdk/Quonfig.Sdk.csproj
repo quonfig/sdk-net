@@ -68,10 +68,12 @@
   </ItemGroup>
 
   <!--
-    netstandard2.0 only: BouncyCastle provides the AES-GCM polyfill (System.Security.Cryptography.AesGcm
-    is net8.0+). Conditional so net8.0 consumers don't pick it up transitively — they get the BCL path.
+    BouncyCastle on EVERY target: X25519 for qf1 secrets is not in the .NET base class library on any
+    target (decided in project/plans/2026-10-30-secret-key-rotation.md, "Crypto: settled";
+    qfg-8seuf.13). On netstandard2.0 it also provides AES-GCM (System.Security.Cryptography.AesGcm is
+    net8.0+); net8.0 keeps the BCL AesGcm.
   -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+  <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" />
   </ItemGroup>
 

@@ -9,57 +9,43 @@ namespace Quonfig.Sdk.Eval;
 
 /// <summary>
 /// Post-evaluation value resolution: walks a candidate <see cref="Value"/> through ENV_VAR
-/// provisioning → weighted-variant bucketing → AES-GCM decryption → type coercion in that order
-/// (the order matches sdk-java / sdk-go so the .NET SDK produces the same final value for the same
-/// stored payload).
+/// provisioning → weighted-variant bucketing → type coercion, and decrypts qf1 secrets (the
+/// order matches the other SDKs so the .NET SDK produces the same final value for the same stored
+/// payload).
 ///
-/// <para>Plain (non-PROVIDED, non-WEIGHTED, non-confidential) values pass through unchanged. The
-/// resolver is decoupled from the not-yet-implemented evaluator via two pluggable callbacks:
-/// <see cref="EnvLookup"/> reads env vars, and <see cref="KeyResolver"/> resolves the
-/// <see cref="Value.DecryptWith"/>-pointed key config to its plaintext hex key (the future
-/// <c>Evaluator</c> wires this to its own <c>Evaluate</c> entry point).</para>
+/// <para>Plain (non-PROVIDED, non-WEIGHTED, non-secret) values pass through unchanged. A value of
+/// a <see cref="ConfigType.Secret"/> row is a qf1 string (spec
+/// <c>project/plans/secrets-qf1-spec.md</c>) decrypted on every get with private keys read from the
+/// <c>QUONFIG_KEYSET*</c> env var it names, through <see cref="EnvLookup"/>. The old
+/// <c>decryptWith</c> format is no longer read: such a value fails with
+/// <see cref="QuonfigDecryptionException"/>.</para>
 /// </summary>
 public sealed class Resolver
 {
     /// <summary>Callback signature for resolving an AES-GCM decryption key config to its value.</summary>
+    [Obsolete("decryptWith values are no longer decrypted (qf1 secrets replace them), so a KeyResolver is never called. It will be removed in a future major version.")]
     public delegate Value? KeyResolver(string configKey, ContextSet contexts);
-
-    // Environment-aware form of KeyResolver used by Evaluator so the decrypt-key config is
-    // evaluated in the same environment as the config being decrypted (sdk-go
-    // runtime_resolver.go resolveDecryption passes envID; qfg-goi1.2.14). Internal so the public
-    // KeyResolver delegate and the public Resolve overloads keep their shape.
-    internal delegate Value? EnvKeyResolver(string configKey, ContextSet contexts, string? environmentId);
 
     /// <summary>Callback signature for env-var lookup. Returning null means the var is unset.</summary>
     public delegate string? EnvLookup(string name);
 
     private readonly EnvLookup _envLookup;
-    private readonly EnvKeyResolver _keyResolver;
+    private readonly Qf1Reader _qf1;
 
     /// <summary>
-    /// Initializes a new resolver. Both callbacks are optional; the default
-    /// <paramref name="envLookup"/> reads <see cref="Environment.GetEnvironmentVariable(string)"/>
-    /// and the default <paramref name="keyResolver"/> always returns null (so decryption requests
-    /// will fail with <see cref="QuonfigDecryptionException"/> until the evaluator is wired in).
+    /// Initializes a new resolver. The default <paramref name="envLookup"/> reads
+    /// <see cref="Environment.GetEnvironmentVariable(string)"/>; it serves ENV_VAR provided values
+    /// and the <c>QUONFIG_KEYSET*</c> keysets of qf1 secrets. <paramref name="keyResolver"/> is
+    /// ignored: <c>decryptWith</c> values are no longer decrypted.
     /// </summary>
+#pragma warning disable CS0618 // the public signature keeps the obsolete KeyResolver parameter for compatibility
     public Resolver(EnvLookup? envLookup = null, KeyResolver? keyResolver = null)
+#pragma warning restore CS0618
     {
+        _ = keyResolver;
         _envLookup = envLookup ?? (name => Environment.GetEnvironmentVariable(name));
-        if (keyResolver is null)
-        {
-            _keyResolver = (_, _, _) => null;
-        }
-        else
-        {
-            _keyResolver = (configKey, contexts, _) => keyResolver(configKey, contexts);
-        }
-    }
-
-    // Used by Evaluator: the key resolver receives the effective environment id.
-    internal Resolver(EnvLookup? envLookup, EnvKeyResolver keyResolver)
-    {
-        _envLookup = envLookup ?? (name => Environment.GetEnvironmentVariable(name));
-        _keyResolver = keyResolver;
+        var lookup = _envLookup;
+        _qf1 = new Qf1Reader(name => lookup(name));
     }
 
     /// <summary>Prefix on the redacted telemetry marker for confidential / encrypted values.</summary>
@@ -74,9 +60,6 @@ public sealed class Resolver
     /// plain value, so telemetry reports the real value; the MD5 here is a non-cryptographic
     /// fingerprint used only to distinguish distinct secrets in a summary, never for security.
     /// </summary>
-    [System.Diagnostics.CodeAnalysis.SuppressMessage(
-        "Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
-        Justification = "MD5 is a non-security fingerprint used only to redact secrets in telemetry — the cross-SDK reportable-value marker; it never protects data.")]
     internal static string? ReportableValueFor(Value? val)
     {
         if (val is null)
@@ -91,7 +74,15 @@ public sealed class Resolver
         {
             return null;
         }
-        string raw = StringOf(val.Payload);
+        return RedactedMarker(StringOf(val.Payload));
+    }
+
+    /// <summary>The <c>*****</c> + 5 MD5 hex marker over <paramref name="raw"/>, unconditionally.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Security", "CA5351:Do Not Use Broken Cryptographic Algorithms",
+        Justification = "MD5 is a non-security fingerprint used only to redact secrets in telemetry — the cross-SDK reportable-value marker; it never protects data.")]
+    internal static string? RedactedMarker(string raw)
+    {
         byte[] rawBytes = System.Text.Encoding.UTF8.GetBytes(raw);
 #if NET8_0_OR_GREATER
         byte[] sum = System.Security.Cryptography.MD5.HashData(rawBytes);
@@ -129,7 +120,7 @@ public sealed class Resolver
     /// </summary>
     /// <exception cref="QuonfigEnvVarNotSetException">ENV_VAR provided value with no matching env var (and no fallback).</exception>
     /// <exception cref="QuonfigCoercionException">Env-var string can't be coerced to <paramref name="configValueType"/>.</exception>
-    /// <exception cref="QuonfigDecryptionException">Decrypt key config is missing/unresolvable, or AES-GCM fails.</exception>
+    /// <exception cref="QuonfigDecryptionException">The value still carries <c>decryptWith</c>, which is no longer read.</exception>
     public Value Resolve(Value candidate, string configKey, ValueType configValueType, ContextSet contexts) =>
         Resolve(candidate, configKey, configValueType, contexts, out _);
 
@@ -143,7 +134,7 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out _, null, null);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out _, false);
     }
 
     /// <summary>
@@ -156,27 +147,23 @@ public sealed class Resolver
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
         out int weightedValueIndex, out string? missingHashPropertyName)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null, null);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, false);
     }
 
     /// <summary>
-    /// Same as the public overload, evaluating any <c>decryptWith</c> key config in
-    /// <paramref name="environmentId"/> (qfg-goi1.2.14). Used by <see cref="Evaluator"/>.
+    /// Same as the public overload, for a value of a row of type <paramref name="rowType"/>: a
+    /// <see cref="ConfigType.Secret"/> row's value is decrypted as qf1. Used by <see cref="Evaluator"/>.
     /// </summary>
     internal Value Resolve(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        string? environmentId, out int weightedValueIndex, out string? missingHashPropertyName)
+        ConfigType rowType, out int weightedValueIndex, out string? missingHashPropertyName)
     {
-        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, null, environmentId);
+        return Resolve(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, rowType == ConfigType.Secret);
     }
 
-    // keyPath: the config keys already being resolved above this one through decryptWith. A
-    // decryptWith pointing back onto the path (a key config decrypted with itself, or A -> B -> A)
-    // is a cycle and fails with QuonfigDecryptionException instead of recursing into an
-    // uncatchable StackOverflowException (qfg-9dxb.7, sdk-go qfg-9dxb.4). Null at the top level.
     private Value Resolve(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath, string? environmentId)
+        out int weightedValueIndex, out string? missingHashPropertyName, bool secret)
     {
 #if NET8_0_OR_GREATER
         ArgumentNullException.ThrowIfNull(candidate);
@@ -191,6 +178,19 @@ public sealed class Resolver
         weightedValueIndex = -1;
         missingHashPropertyName = null;
 
+        // Spec 13.3 R1: this SDK has no decryptWith code. A value that still carries it fails
+        // instead of being returned as if its ciphertext were the value.
+        if (!string.IsNullOrEmpty(candidate.DecryptWith))
+        {
+            throw new QuonfigDecryptionException(
+                $"config \"{configKey}\": value carries decryptWith, an old secret format this SDK no longer reads; store it in secrets/ as qf1");
+        }
+
+        if (secret)
+        {
+            return ResolveSecret(candidate, configKey);
+        }
+
         if (candidate.Type == ValueType.Provided)
         {
             return ResolveProvided(candidate, configKey, configValueType);
@@ -198,12 +198,7 @@ public sealed class Resolver
 
         if (candidate.Type == ValueType.WeightedValues)
         {
-            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName, keyPath, environmentId);
-        }
-
-        if (candidate.Confidential && !string.IsNullOrEmpty(candidate.DecryptWith))
-        {
-            return ResolveDecryption(candidate, configKey, contexts, keyPath, environmentId);
+            return ResolveWeighted(candidate, configKey, configValueType, contexts, out weightedValueIndex, out missingHashPropertyName);
         }
 
         return candidate;
@@ -234,7 +229,7 @@ public sealed class Resolver
 
     private Value ResolveWeighted(
         Value candidate, string configKey, ValueType configValueType, ContextSet contexts,
-        out int weightedValueIndex, out string? missingHashPropertyName, string[]? keyPath, string? environmentId)
+        out int weightedValueIndex, out string? missingHashPropertyName)
     {
         weightedValueIndex = -1;
         missingHashPropertyName = null;
@@ -266,7 +261,7 @@ public sealed class Resolver
 
         // Recurse: a weighted variant's value can itself be PROVIDED/confidential/etc. The bucket
         // index is the one we just picked — inner resolution doesn't change it.
-        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, keyPath, environmentId);
+        return Resolve(wv.Variants[pickedIndex].Value, configKey, configValueType, contexts, out _, out _, false);
     }
 
     // Random source for rollouts with no hashByPropertyName (qfg-t9wo). System.Random is not
@@ -314,69 +309,29 @@ public sealed class Resolver
         };
     }
 
-    // ----- Decryption -----
+    // ----- qf1 secrets -----
 
-    private Value ResolveDecryption(
-        Value candidate, string configKey, ContextSet contexts, string[]? keyPath, string? environmentId)
+    // Spec 8 and 9.3: a failure fails only this get, with QuonfigDecryptionException. The message
+    // is the qf1 class and detail (keyset and fingerprints only) plus the config key; no inner
+    // exception, so no library text, key material, payload or plaintext can ride along.
+    private Value ResolveSecret(Value candidate, string configKey)
     {
-        keyPath = Append(keyPath, configKey);
-        if (Array.IndexOf(keyPath, candidate.DecryptWith) >= 0)
+        if (candidate.Type != ValueType.String || candidate.Payload is not string stored)
         {
             throw new QuonfigDecryptionException(
-                $"decryption key config \"{candidate.DecryptWith}\" is part of a decryptWith cycle");
+                $"config \"{configKey}\": qf1 {Qf1Error.Malformed}: a secret value must be a qf1 string");
         }
 
-        Value? keyValue = _keyResolver(candidate.DecryptWith!, contexts, environmentId);
-        if (keyValue is null)
+        string? plaintext = _qf1.Decrypt(stored, out var error);
+        if (plaintext is null)
         {
-            throw new QuonfigDecryptionException(
-                $"decryption key config \"{candidate.DecryptWith}\" not found");
+            throw new QuonfigDecryptionException($"config \"{configKey}\": {error!.Message}");
         }
 
-        Value resolvedKey;
-        try
-        {
-            // The key config can itself be PROVIDED — recurse so the env-var lookup happens.
-            resolvedKey = Resolve(keyValue, candidate.DecryptWith!, ValueType.String, contexts, out _, out _, keyPath, environmentId);
-        }
-        catch (QuonfigException e)
-        {
-            throw new QuonfigDecryptionException(
-                $"failed to resolve decryption key from \"{candidate.DecryptWith}\": {e.Message}", e);
-        }
-
-        string? secretKeyHex = resolvedKey.Payload?.ToString();
-        if (string.IsNullOrEmpty(secretKeyHex))
-        {
-            throw new QuonfigDecryptionException(
-                $"decryption key from \"{candidate.DecryptWith}\" is empty");
-        }
-
-        string ciphertext = candidate.Payload?.ToString() ?? "";
-        string plaintext;
-        try
-        {
-            plaintext = AesGcmCompat.Decrypt(secretKeyHex!, ciphertext);
-        }
-        catch (QuonfigDecryptionException e)
-        {
-            throw new QuonfigDecryptionException(
-                $"decryption failed for config \"{configKey}\": {e.Message}", e);
-        }
-
-        // Plaintext remains confidential (for telemetry redaction); decryptWith is cleared since
-        // the value is no longer ciphertext. The telemetry marker is built from the stored
-        // ciphertext, not the plaintext (cross-SDK contract, telemetry.yaml).
+        // The plaintext stays confidential, and telemetry reports the marker over the STORED
+        // ciphertext, never the plaintext (spec 13.5), even if the stored value lacks
+        // confidential: true.
         return Value.Decrypted(plaintext, candidate);
-    }
-
-    private static string[] Append(string[]? path, string key)
-    {
-        if (path is null) return new[] { key };
-        var next = new string[path.Length + 1];
-        Array.Copy(path, next, path.Length);
-        next[path.Length] = key;
-        return next;
     }
 
     // ----- Coercion -----

@@ -125,11 +125,18 @@
       "quonfig.sdk": {
         "type": "Project",
         "dependencies": {
+          "BouncyCastle.Cryptography": "[2.7.0, )",
           "Microsoft.Extensions.Logging.Abstractions": "[8.0.3, )",
           "System.Collections.Immutable": "[8.0.0, )",
           "System.Text.Json": "[8.0.6, )",
           "System.Threading.Channels": "[8.0.0, )"
         }
+      },
+      "BouncyCastle.Cryptography": {
+        "type": "CentralTransitive",
+        "requested": "[2.7.0, )",
+        "resolved": "2.7.0",
+        "contentHash": "U+12df8UEWHgBi04YVf/Lgi2dy3SItlIYvHjjEVa/BngCQIzDCDRBk50DDByCfDvSbe5pRNFr3b7UrVK2kMcLw=="
       },
       "System.Collections.Immutable": {
         "type": "CentralTransitive",

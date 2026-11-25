@@ -10,7 +10,7 @@ using ValueType = Quonfig.Sdk.Eval.ValueType;
 namespace Quonfig.Sdk.Tests.Eval;
 
 /// <summary>
-/// Resolver contract — ENV_VAR provisioning, weighted-value bucketing, AES-GCM decryption, and
+/// Resolver contract — ENV_VAR provisioning, weighted-value bucketing, refusal of decryptWith values, and
 /// env-var-string → typed coercion. Mirrors sdk-java's <c>ResolverTest</c> case-for-case so the
 /// .NET SDK passes the same integration-test-data YAML cases. Where Java has a separate
 /// <c>configRow</c> argument carrying the value-type, the .NET surface threads the configKey and
@@ -18,7 +18,7 @@ namespace Quonfig.Sdk.Tests.Eval;
 /// </summary>
 public sealed class ResolverTests
 {
-    // Same fixture as AesGcmCompatTests / sdk-java's ResolverTest.
+    // Old-format (decryptWith) fixture, same as AesGcmCompatTests: no longer decrypted.
     private const string FixtureKeyHex =
         "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221";
     private const string FixtureCiphertext =
@@ -246,48 +246,48 @@ public sealed class ResolverTests
         output.Payload.Should().Be(777L);
     }
 
-    // ----- AES-GCM decryption -----
+    // ----- decryptWith is no longer read (qf1 spec 13.3 R1) -----
 
     [Fact]
-    public void Resolve_Confidential_DecryptsViaKeyLookup()
+    public void Resolve_DecryptWith_FailsEvenWhenTheKeyIsResolvable()
     {
-        // Key resolver returns the hex key for "secrets.key"; resolver decrypts ciphertext.
+        // The old format's key would decrypt this ciphertext; the SDK must still refuse it, never
+        // return it as plaintext, and never call the (obsolete) key resolver.
+        bool keyResolverCalled = false;
         var r = new Resolver(
             keyResolver: (name, _) =>
-                name == "secrets.key"
-                    ? new Value(ValueType.String, FixtureKeyHex, false, null)
-                    : null);
+            {
+                keyResolverCalled = true;
+                return new Value(ValueType.String, FixtureKeyHex, false, null);
+            });
 
         var ciphertextVal = new Value(ValueType.String, FixtureCiphertext, true, "secrets.key");
-        var output = r.Resolve(ciphertextVal, "a.secret.config", ValueType.String, new ContextSet());
-
-        output.Type.Should().Be(ValueType.String);
-        output.Payload.Should().Be(FixturePlaintext);
-        output.Confidential.Should().BeTrue("decrypted plaintext must stay marked confidential");
-    }
-
-    [Fact]
-    public void Resolve_Confidential_MissingKeyConfig_ThrowsDecryption()
-    {
-        var r = new Resolver(keyResolver: (_, _) => null);
-        var ciphertextVal = new Value(ValueType.String, FixtureCiphertext, true, "missing.key");
         var act = () => r.Resolve(ciphertextVal, "a.secret.config", ValueType.String, new ContextSet());
-        act.Should().Throw<QuonfigDecryptionException>().WithMessage("*missing.key*");
+
+        act.Should().Throw<QuonfigDecryptionException>().WithMessage("*decryptWith*")
+            .Which.Message.Should().NotContain(FixturePlaintext).And.NotContain(FixtureCiphertext);
+        keyResolverCalled.Should().BeFalse();
     }
 
     [Fact]
-    public void Resolve_Confidential_KeyIsProvidedEnvVar_RecursivelyResolved()
+    public void Resolve_DecryptWith_FailsWithoutConfidentialToo()
     {
-        // The encryption key is stored as a PROVIDED env-var value; resolver must recurse.
-        var r = new Resolver(
-            envLookup: n => n == "ENCRYPTION_KEY_HEX" ? FixtureKeyHex : null,
-            keyResolver: (name, _) =>
-                name == "secrets.key"
-                    ? Provided("ENCRYPTION_KEY_HEX")
-                    : null);
+        var r = new Resolver();
+        var val = new Value(ValueType.String, FixtureCiphertext, false, "secrets.key");
+        var act = () => r.Resolve(val, "a.secret.config", ValueType.String, new ContextSet());
+        act.Should().Throw<QuonfigDecryptionException>().WithMessage("*decryptWith*");
+    }
 
-        var ciphertextVal = new Value(ValueType.String, FixtureCiphertext, true, "secrets.key");
-        var output = r.Resolve(ciphertextVal, "a.secret.config", ValueType.String, new ContextSet());
-        output.Payload.Should().Be(FixturePlaintext);
+    [Fact]
+    public void Resolve_DecryptWith_InsideAWeightedVariant_Fails()
+    {
+        var r = new Resolver();
+        var wv = new Value(
+            ValueType.WeightedValues,
+            new WeightedValuesPayload(null,
+                new List<WeightedVariant> { new WeightedVariant(1, new Value(ValueType.String, FixtureCiphertext, true, "secrets.key")) }),
+            false, null);
+        var act = () => r.Resolve(wv, "a.secret.config", ValueType.String, new ContextSet());
+        act.Should().Throw<QuonfigDecryptionException>().WithMessage("*decryptWith*");
     }
 }

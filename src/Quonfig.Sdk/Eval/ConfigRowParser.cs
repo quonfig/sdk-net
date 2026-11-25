@@ -261,6 +261,7 @@ public static class ConfigRowParser
         "segment" => ConfigType.Segment,
         "log_level" => ConfigType.LogLevel,
         "schema" => ConfigType.Schema,
+        "secret" => ConfigType.Secret,
         _ => ConfigType.Unknown,
     };
 

@@ -29,12 +29,8 @@ internal static class TestSetup
 {
     public const string ENV_ID = "Production";
 
-    private const string ENCRYPTION_KEY =
-        "c87ba22d8662282abe8a0e4651327b579cb64a454ab0f4c170b45b15f049a221";
-
     private static readonly Dictionary<string, string> BaseEnv = new(StringComparer.Ordinal)
     {
-        ["PREFAB_INTEGRATION_TEST_ENCRYPTION_KEY"] = ENCRYPTION_KEY,
         ["IS_A_NUMBER"] = "1234",
         ["NOT_A_NUMBER"] = "not_a_number",
     };
@@ -104,6 +100,9 @@ internal static class TestSetup
         var overrides = EnvOverrides.Value;
         if (overrides is not null && overrides.TryGetValue(name, out var v)) return v;
         if (BaseEnv.TryGetValue(name, out var b)) return b;
+        // qf1 keysets come only from the case's `keysets:` (TestSetup.Env); never read this
+        // machine's real QUONFIG_KEYSET* variables (spec 14, "tests MUST NOT read real keysets").
+        if (name.StartsWith("QUONFIG_KEYSET", StringComparison.Ordinal)) return null;
         return Environment.GetEnvironmentVariable(name);
     }
 

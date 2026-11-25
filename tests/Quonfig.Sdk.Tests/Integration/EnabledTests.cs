@@ -11,6 +11,22 @@ namespace Quonfig.Sdk.Tests.Integration;
 
 public sealed class EnabledTests
 {
+    private static string Qf1TestKeyset(params string[] labels)
+    {
+        var entries = new System.Collections.Generic.List<string>();
+        foreach (var label in labels)
+        {
+            var input = System.Text.Encoding.UTF8.GetBytes("qf1 test vector private key: " + label);
+#if NET8_0_OR_GREATER
+            var digest = System.Security.Cryptography.SHA256.HashData(input);
+#else
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var digest = sha256.ComputeHash(input);
+#endif
+            entries.Add("qf1-priv-" + Convert.ToBase64String(digest).TrimEnd('=').Replace('+', '-').Replace('/', '_'));
+        }
+        return string.Join(",", entries);
+    }
 
     [Fact(DisplayName = "returns the correct value for a simple flag")]
     public async Task ReturnsTheCorrectValueForASimpleFlag()
@@ -1973,12 +1989,13 @@ public sealed class EnabledTests
     [Fact(DisplayName = "enabled on a decryption failure returns false")]
     public async Task EnabledOnADecryptionFailureReturnsFalse()
     {
+        using var env = TestSetup.Env("QUONFIG_KEYSET", Qf1TestKeyset("QUONFIG_KEYSET/1"), "QUONFIG_KEYSETX", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST", Qf1TestKeyset("QUONFIG_KEYSET_TEST/1"), "QUONFIG_KEYSET_TEST_PROD", Qf1TestKeyset("QUONFIG_KEYSET_TEST_PROD/new", "QUONFIG_KEYSET_TEST_PROD/old"));
         await using var client = TestSetup.NewClient(new QuonfigOptions
         {
             Datadir = TestSetup.DATADIR,
             Environment = TestSetup.ENV_ID,
         });
-        var actual = client.IsFeatureEnabled("a.broken.secret.config");
+        var actual = client.IsFeatureEnabled("qf1.secret.key.not.held");
         Assert.False(actual);
     }
 }

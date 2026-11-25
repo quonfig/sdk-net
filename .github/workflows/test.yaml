@@ -27,7 +27,7 @@ jobs:
           # Pinned to a tag (not main) so a typo in shared YAML can't
           # break every SDK's CI at once. Bump to a newer tag when
           # adopting new test cases. See integration-test-data/RELEASING.md.
-          ref: v2026.10.23
+          ref: 2e5b948b09f38922824a96bce94b746a8ce3e655  # qfg-8seuf.13: ITD main with the qf1 cases; move to the tag that includes it before merge
 
       # Unit, release, chaos and failover-chaos must run against one ITD tag (qfg-6vno.7):
       # a chaos pin that trails the unit pin runs chaos against an older contract.

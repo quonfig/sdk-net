@@ -16,14 +16,19 @@ namespace Quonfig.Sdk.Datadir;
 /// and consumers who bootstrap from a static distribution.
 ///
 /// <para>Mirrors <c>sdk-java DatadirLoader</c>, <c>sdk-go workspace_loader.go</c>, and
-/// <c>sdk-node datadir.ts</c>. Subdirs walked: <c>configs</c>, <c>feature-flags</c>, <c>segments</c>,
-/// <c>log-levels</c>. <c>schemas/</c> is intentionally excluded — those files are raw JSON Schema
+/// <c>sdk-node datadir.ts</c>. Subdirs walked, in this order: <c>configs</c>, <c>feature-flags</c>,
+/// <c>segments</c>, <c>log-levels</c>, <c>secrets</c>. <c>secrets/</c> is LAST so a qf1 secret
+/// shadows a same-key document in <c>configs/</c> (the store is last write wins; spec 13.7), and a
+/// document from <c>secrets/</c> is a secret because of its directory: its <c>type</c> is set to
+/// <c>"secret"</c> whatever the file says. <c>schemas/</c> is intentionally excluded — those files are raw JSON Schema
 /// documents, not config envelopes, and loading them produces empty-key ghost rows in the store
 /// (cross-SDK fix, qfg-b5yi).</para>
 /// </summary>
 public static class DatadirLoader
 {
-    private static readonly string[] Subdirs = { "configs", "feature-flags", "segments", "log-levels" };
+    // Order matters: secrets/ is loaded last (spec 13.7).
+    private const string SecretsDir = "secrets";
+    private static readonly string[] Subdirs = { "configs", "feature-flags", "segments", "log-levels", SecretsDir };
 
     // CA1848 — compiled message delegate so per-file warnings allocate no string array.
     // Microsoft.Extensions.Logging.LogLevel clashes with the SDK's own log-level domain enum
@@ -80,8 +85,10 @@ public static class DatadirLoader
                 try
                 {
                     var bytes = File.ReadAllBytes(f);
-                    var doc = JsonDocument.Parse(bytes);
-                    configs.Add(doc.RootElement.Clone());
+                    using var doc = JsonDocument.Parse(bytes);
+                    configs.Add(string.Equals(sub, SecretsDir, StringComparison.Ordinal)
+                        ? WithType(doc.RootElement, "secret")
+                        : doc.RootElement.Clone());
                 }
                 catch (Exception ex) when (ex is IOException || ex is JsonException || ex is UnauthorizedAccessException)
                 {
@@ -100,6 +107,27 @@ public static class DatadirLoader
         var workspaceId = new DirectoryInfo(datadir).Name;
         var meta = new Meta($"datadir:{datadir}", environment, workspaceId);
         return new ConfigEnvelope(configs, meta);
+    }
+
+    // A copy of the document object with its top-level "type" set to typeName (added if absent).
+    // A non-object document is returned as is; the store skips it.
+    private static JsonElement WithType(JsonElement root, string typeName)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return root.Clone();
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("type", typeName);
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "type", StringComparison.Ordinal)) continue;
+                prop.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+        using var stamped = JsonDocument.Parse(buffer.ToArray());
+        return stamped.RootElement.Clone();
     }
 
     private static IReadOnlyList<string> ReadEnvironmentNames(string manifestPath)
